@@ -40,5 +40,8 @@ class BlockerState(context: Context) {
 
     fun todayCount(): Int = prefs.getInt(todayKey(), 0)
 
-    fun incrementToday() = prefs.edit().putInt(todayKey(), todayCount() + 1).apply()
+    fun incrementToday() {
+        val key = todayKey()
+        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).apply()
+    }
 }

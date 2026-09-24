@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "comment": "View IDs are bare (package prefix added in code). Instagram renames these across updates - add new ones here, or copy this file to the app's files/ dir to override without reinstalling. Turn on Debug mode in the app and watch 'adb logcat -s ReelsBlocker' to discover current IDs.",
+  "version": 2,
+  "comment": "View IDs are bare (package prefix added in code, letters/digits/underscore only). Instagram renames these across updates - discover current ones with Debug mode + 'adb logcat -s ReelsBlocker', then update this file and use the in-app 'Import rules file' button (no reinstall needed). Tab descriptions must match the bottom-nav labels EXACTLY (or 'Label,...' prefix) and are locale-specific: on a non-English phone add the translated labels to selectedTabDescs and home.tabDescs (e.g. Spanish: 'Inicio', 'Buscar y explorar').",
   "reels": {
     "viewIds": [
       "clips_viewer_view_pager",
@@ -18,5 +18,8 @@
       "explore_recycler_view"
     ],
     "selectedTabDescs": ["Search and explore", "Search and Explore", "Explore", "Search"]
+  },
+  "home": {
+    "tabDescs": ["Home"]
   }
 }

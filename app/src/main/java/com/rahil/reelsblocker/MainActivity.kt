@@ -3,19 +3,31 @@ package com.rahil.reelsblocker
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.format.DateFormat
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
+import org.json.JSONObject
+import java.io.File
 import java.util.Date
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var state: BlockerState
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val pauseTicker = Runnable { refresh() }
+
+    private val importRules =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+            if (uri != null) importRulesFrom(uri)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,6 +66,9 @@ class MainActivity : AppCompatActivity() {
                 )
             )
         }
+        findViewById<MaterialButton>(R.id.btn_import_rules).setOnClickListener {
+            importRules.launch("*/*")
+        }
         findViewById<MaterialButton>(R.id.btn_reload_rules).setOnClickListener {
             val service = BlockerService.instance
             if (service != null) {
@@ -70,23 +85,63 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    override fun onPause() {
+        uiHandler.removeCallbacks(pauseTicker)
+        super.onPause()
+    }
+
     private fun pauseFor(minutes: Int) {
         state.pauseUntil = System.currentTimeMillis() + minutes * 60_000L
         refresh()
     }
 
+    private fun importRulesFrom(uri: Uri) {
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            if (bytes == null || bytes.isEmpty()) {
+                Toast.makeText(this, "Could not read that file", Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (bytes.size > DetectionRules.MAX_FILE_BYTES) {
+                Toast.makeText(this, "File too large (max 64KB)", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val text = String(bytes, Charsets.UTF_8)
+            JSONObject(text) // sanity-parse before accepting
+            File(filesDir, "detection_rules.json").writeText(text)
+            BlockerService.instance?.reloadRules()
+            Toast.makeText(this, "Rules imported ✓", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Import failed: not valid JSON", Toast.LENGTH_LONG).show()
+        }
+    }
+
     private fun refresh() {
-        val serviceOn = isServiceEnabled()
-        findViewById<TextView>(R.id.tv_service_status).text =
-            getString(if (serviceOn) R.string.status_service_on else R.string.status_service_off)
-        findViewById<MaterialButton>(R.id.btn_accessibility).isEnabled = !serviceOn
+        val enabledInSettings = isServiceEnabledInSettings()
+        val actuallyRunning = BlockerService.instance != null
+        findViewById<TextView>(R.id.tv_service_status).text = getString(
+            when {
+                enabledInSettings && actuallyRunning -> R.string.status_service_on
+                enabledInSettings -> R.string.status_service_stuck
+                else -> R.string.status_service_off
+            }
+        )
+        findViewById<MaterialButton>(R.id.btn_accessibility).isEnabled = !(enabledInSettings && actuallyRunning)
 
         findViewById<TextView>(R.id.tv_stats).text = getString(R.string.stats_today, state.todayCount())
 
-        findViewById<TextView>(R.id.tv_pause_status).text =
-            if (state.isPaused())
-                "Paused until " + DateFormat.getTimeFormat(this).format(Date(state.pauseUntil))
-            else getString(R.string.not_paused)
+        val tvPause = findViewById<TextView>(R.id.tv_pause_status)
+        if (state.isPaused()) {
+            tvPause.text = getString(
+                R.string.paused_until,
+                DateFormat.getTimeFormat(this).format(Date(state.pauseUntil))
+            )
+            // refresh again the moment the pause expires so the label never goes stale
+            uiHandler.removeCallbacks(pauseTicker)
+            uiHandler.postDelayed(pauseTicker, state.pauseUntil - System.currentTimeMillis() + 250)
+        } else {
+            tvPause.text = getString(R.string.not_paused)
+        }
 
         val pm = getSystemService(POWER_SERVICE) as PowerManager
         val exempt = pm.isIgnoringBatteryOptimizations(packageName)
@@ -95,7 +150,7 @@ class MainActivity : AppCompatActivity() {
             getString(if (exempt) R.string.battery_ok else R.string.battery_body)
     }
 
-    private fun isServiceEnabled(): Boolean {
+    private fun isServiceEnabledInSettings(): Boolean {
         val enabled = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
