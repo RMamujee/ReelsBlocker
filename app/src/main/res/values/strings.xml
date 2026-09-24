@@ -1,0 +1,31 @@
+<resources>
+    <string name="app_name">Reels Blocker</string>
+    <string name="service_description">Watches Instagram only. When you land on Reels or Explore, it backs you out and shows a reminder. No data leaves your phone.</string>
+
+    <string name="status_service_on">Blocker service: RUNNING</string>
+    <string name="status_service_off">Blocker service: NOT ENABLED</string>
+    <string name="open_accessibility_settings">Enable in Accessibility Settings</string>
+
+    <string name="master_switch">Blocking enabled</string>
+    <string name="block_reels">Block Reels</string>
+    <string name="block_explore">Block Explore / Search grid</string>
+
+    <string name="pause_title">Take a break from blocking</string>
+    <string name="pause_15">Pause 15 min</string>
+    <string name="pause_60">Pause 1 hour</string>
+    <string name="resume_now">Resume now</string>
+    <string name="not_paused">Not paused</string>
+
+    <string name="stats_today">Blocked %1$d times today</string>
+
+    <string name="battery_title">Keep alive on Samsung</string>
+    <string name="battery_body">One UI kills background services aggressively. Tap below and allow \"unrestricted\" battery. Also check Settings &gt; Apps &gt; Reels Blocker &gt; Battery &gt; Unrestricted.</string>
+    <string name="battery_button">Exempt from battery optimization</string>
+    <string name="battery_ok">Battery optimization: already exempt ✓</string>
+
+    <string name="debug_mode">Debug: log Instagram screen IDs to Logcat</string>
+
+    <string name="overlay_reels">Reels blocked 🎯</string>
+    <string name="overlay_explore">Explore blocked 🎯</string>
+    <string name="overlay_sub">Go do something real.</string>
+</resources>
