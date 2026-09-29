@@ -36,16 +36,22 @@ class MainActivity : AppCompatActivity() {
         val swMaster = findViewById<SwitchMaterial>(R.id.sw_master)
         val swReels = findViewById<SwitchMaterial>(R.id.sw_reels)
         val swExplore = findViewById<SwitchMaterial>(R.id.sw_explore)
+        val swHideIcon = findViewById<SwitchMaterial>(R.id.sw_hide_reels_icon)
+        val swDmReels = findViewById<SwitchMaterial>(R.id.sw_dm_reels)
         val swDebug = findViewById<SwitchMaterial>(R.id.sw_debug)
 
         swMaster.isChecked = state.masterEnabled
         swReels.isChecked = state.blockReels
         swExplore.isChecked = state.blockExplore
+        swHideIcon.isChecked = state.hideReelsIcon
+        swDmReels.isChecked = state.allowDmReels
         swDebug.isChecked = state.debugMode
 
         swMaster.setOnCheckedChangeListener { _, checked -> state.masterEnabled = checked }
         swReels.setOnCheckedChangeListener { _, checked -> state.blockReels = checked }
         swExplore.setOnCheckedChangeListener { _, checked -> state.blockExplore = checked }
+        swHideIcon.setOnCheckedChangeListener { _, checked -> state.hideReelsIcon = checked }
+        swDmReels.setOnCheckedChangeListener { _, checked -> state.allowDmReels = checked }
         swDebug.setOnCheckedChangeListener { _, checked -> state.debugMode = checked }
 
         findViewById<MaterialButton>(R.id.btn_accessibility).setOnClickListener {

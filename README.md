@@ -11,7 +11,22 @@ An `AccessibilityService` (`BlockerService`) receives window events **from Insta
 
 After each block there's a 1.5s cooldown so one escape can't fire twice mid-animation, and the service re-checks the screen when the cooldown ends. If you get blocked 3+ times within 10 seconds, a full-screen "Blocked 🎯" overlay appears for 2.5s as a stronger nudge. Every block increments a daily counter shown in the app.
 
-**Note:** with Explore blocking on, the whole Search tab is blocked, including searching for accounts. Turn off "Block Explore" if you need search.
+### Covers: the Reels icon and the Explore grid
+
+Two things are hidden behind opaque patches (accessibility overlays matched to Instagram's black/white background) instead of being kicked:
+
+- **The Reels tab icon** ("Hide the Reels tab icon"): its tab cell is covered and taps on it do nothing. The Reels tab is still blocked underneath if you ever reach it.
+- **The Explore grid** ("Hide the Explore grid"): on the Search tab, the grid of recommended posts is covered but the search bar isn't. Tap it and search for accounts as normal. The cover disappears while the search bar is focused or holds a query, so results show normally. Reels opened from search results are still blocked (except ones reached from DMs). If the grid's view ID isn't known, the cover spans from the search bar down to the tab bar. Only if no cover can be placed does it fall back to the old kick-to-Home.
+
+Covers only exist while the thing they hide is on screen. Instagram can leave the hidden tab bar in its screen data under a chat, story, call or reel viewer, so a cover is never drawn while one of those is showing. They're recognised by the DM ids, the reels viewer ids, and the `noCover.viewIdPrefixes` list in the rules file. The Reels icon cover also requires a visible tab bar in the bottom quarter of the screen.
+
+Overlays sit above every app, and the service only hears from Instagram. So while a cover is showing, and only then, the service checks twice a second which app is in front and removes the covers the moment it isn't Instagram. In chats, stories, calls and viewers there are no covers, so there's no check either. The DM-reel feature doesn't poll at all.
+
+### Reels friends send you
+
+With **Allow reels friends send in DMs** on (the default), a reel you open straight from a DM chat plays normally. The service remembers that the last screen was a chat (spotted by the chat screen's view IDs, the `dm` section of the rules file) and allows that one viewer. Swiping on to the next reel is blocked: while an allowed reel is open, the service listens for scroll events from the reels pager, and a page change sends you back to the chat. Leaving the viewer by any route ends the allowance, so reels reached from a DM reel's profile, audio page, etc. are blocked as usual. Scroll events are ignored everywhere else, so this adds no work while you use the rest of Instagram.
+
+If DM reels still get blocked, the chat screen's IDs have changed. With Debug mode on, open a chat and look for its IDs in `adb logcat -s ReelsBlocker`, then add them to `dm.viewIds`. If swiping on isn't blocked, the `DM-reel scroll` log lines show what the pager reports.
 
 ## When Instagram updates break detection
 

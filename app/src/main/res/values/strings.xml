@@ -10,7 +10,10 @@
 
     <string name="master_switch">Blocking enabled</string>
     <string name="block_reels">Block Reels</string>
-    <string name="block_explore">Block Explore / Search grid</string>
+    <string name="block_explore">Hide the Explore grid (searching for accounts still works)</string>
+    <string name="hide_reels_icon">Hide the Reels tab icon</string>
+    <string name="explore_cover">Explore hidden. Tap the search bar above to find accounts.</string>
+    <string name="allow_dm_reels">Allow reels friends send in DMs (only the one you tap; swiping on gets blocked)</string>
 
     <string name="pause_title">Take a break from blocking</string>
     <string name="pause_15">Pause 15 min</string>

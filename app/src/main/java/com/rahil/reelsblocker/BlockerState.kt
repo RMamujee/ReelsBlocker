@@ -23,6 +23,14 @@ class BlockerState(context: Context) {
         get() = prefs.getBoolean("block_explore", true)
         set(v) = prefs.edit().putBoolean("block_explore", v).apply()
 
+    var hideReelsIcon: Boolean
+        get() = prefs.getBoolean("hide_reels_icon", true)
+        set(v) = prefs.edit().putBoolean("hide_reels_icon", v).apply()
+
+    var allowDmReels: Boolean
+        get() = prefs.getBoolean("allow_dm_reels", true)
+        set(v) = prefs.edit().putBoolean("allow_dm_reels", v).apply()
+
     var debugMode: Boolean
         get() = prefs.getBoolean("debug", false)
         set(v) = prefs.edit().putBoolean("debug", v).apply()

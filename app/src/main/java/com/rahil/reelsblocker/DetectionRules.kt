@@ -19,11 +19,25 @@ class DetectionRules(
     val reelsTabDescs: List<String>,
     val exploreViewIds: List<String>,
     val exploreTabDescs: List<String>,
-    val homeTabDescs: List<String>
+    val homeTabDescs: List<String>,
+    /** Ids that only exist on a DM chat screen, used to allow reels opened from a chat. */
+    val dmViewIds: List<String>,
+    val dmViewIdPrefixes: List<String>,
+    /** Full-screen surfaces (stories, calls, viewers) that may leave a hidden tab bar in the tree; no covers while one is showing. */
+    val noCoverViewIdPrefixes: List<String>
 ) {
     /** Fully-qualified resource ids for O(1) membership checks during the tree walk. */
     val reelsIdSet: Set<String> = reelsViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     val exploreIdSet: Set<String> = exploreViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    private val dmIdSet: Set<String> = dmViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    private val dmFullPrefixes: List<String> = dmViewIdPrefixes.map { IG_ID_PREFIX + it }
+
+    private val noCoverFullPrefixes: List<String> = noCoverViewIdPrefixes.map { IG_ID_PREFIX + it }
+
+    fun isDmViewId(viewId: String): Boolean =
+        viewId in dmIdSet || dmFullPrefixes.any { viewId.startsWith(it) }
+
+    fun isNoCoverViewId(viewId: String): Boolean = noCoverFullPrefixes.any { viewId.startsWith(it) }
 
     companion object {
         private const val TAG = "ReelsBlocker"
@@ -72,8 +86,8 @@ class DetectionRules(
             } catch (t: Throwable) {
                 return "Not valid JSON"
             }
-            if (listOf("reels", "explore", "home").none { root.has(it) }) {
-                return "No reels/explore/home sections found"
+            if (listOf("reels", "explore", "home", "dm", "noCover").none { root.has(it) }) {
+                return "No reels/explore/home/dm/noCover sections found"
             }
             val parsed = parse(text)
             if (tabListsOverlap(parsed.homeTabDescs, parsed.reelsTabDescs, parsed.exploreTabDescs)) {
@@ -150,7 +164,10 @@ class DetectionRules(
                 reelsTabDescs = reelsTabs,
                 exploreViewIds = list("explore", "viewIds", true, fb.exploreViewIds),
                 exploreTabDescs = exploreTabs,
-                homeTabDescs = homeTabs
+                homeTabDescs = homeTabs,
+                dmViewIds = list("dm", "viewIds", true, fb.dmViewIds),
+                dmViewIdPrefixes = list("dm", "viewIdPrefixes", true, fb.dmViewIdPrefixes),
+                noCoverViewIdPrefixes = list("noCover", "viewIdPrefixes", true, fb.noCoverViewIdPrefixes)
             )
         }
 
@@ -159,7 +176,10 @@ class DetectionRules(
             reelsTabDescs = listOf("Reels"),
             exploreViewIds = listOf("explore_grid"),
             exploreTabDescs = listOf("Search and explore", "Explore", "Search"),
-            homeTabDescs = listOf("Home")
+            homeTabDescs = listOf("Home"),
+            dmViewIds = listOf("row_thread_composer_edittext", "row_thread_composer_container", "direct_thread_fragment_container"),
+            dmViewIdPrefixes = listOf("row_thread_composer", "direct_thread"),
+            noCoverViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer")
         )
     }
 }
