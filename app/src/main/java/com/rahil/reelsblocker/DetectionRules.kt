@@ -10,9 +10,9 @@ import java.io.File
  * a copy in files/detection_rules.json overrides the one shipped in assets — update detection
  * without reinstalling the app (use the in-app "Import rules file" button).
  *
- * The loader is hardened against hostile/broken override files: size cap, list caps,
- * view-id charset validation, and any per-list result that comes back empty falls back to
- * the built-in defaults so a typo can never silently disable blocking.
+ * The loader is hardened against hostile/broken override files: size cap, nesting-depth cap,
+ * list caps, view-id charset validation, and any per-list result that comes back empty falls
+ * back to the built-in defaults so a typo can never silently disable blocking.
  */
 class DetectionRules(
     val reelsViewIds: List<String>,
@@ -29,6 +29,9 @@ class DetectionRules(
         private const val TAG = "ReelsBlocker"
         private const val FILE_NAME = "detection_rules.json"
         const val MAX_FILE_BYTES = 64L * 1024
+        // The real schema nests 3 deep; org.json's parser is recursive, so deep nesting
+        // must be rejected before parsing rather than caught as a StackOverflowError.
+        private const val MAX_JSON_DEPTH = 16
         private const val MAX_LIST_ITEMS = 50
         private const val MAX_ITEM_LENGTH = 100
         const val IG_ID_PREFIX = "com.instagram.android:id/"
@@ -47,14 +50,78 @@ class DetectionRules(
                 Log.e(TAG, "Failed to read detection rules, using built-in fallback", t)
                 return fallback()
             }
+            if (!depthOk(json)) {
+                Log.e(TAG, "Detection rules nested too deeply, using built-in fallback")
+                return fallback()
+            }
             return try {
                 parse(json)
             } catch (t: Throwable) {
-                // Throwable, not Exception: pathological JSON can throw StackOverflowError/OOM
-                Log.e(TAG, "Failed to parse detection rules, using built-in fallback", t)
+                // Error type only: JSONException messages embed the whole input.
+                Log.e(TAG, "Failed to parse detection rules (${t.javaClass.simpleName}), using built-in fallback")
                 fallback()
             }
         }
+
+        /** Returns a user-facing reason the file would be rejected or partly ignored, or null if it's clean. */
+        fun checkImport(text: String): String? {
+            if (text.isBlank()) return "File is empty"
+            if (!depthOk(text)) return "File is nested too deeply"
+            val root = try {
+                JSONObject(text)
+            } catch (t: Throwable) {
+                return "Not valid JSON"
+            }
+            if (listOf("reels", "explore", "home").none { root.has(it) }) {
+                return "No reels/explore/home sections found"
+            }
+            val parsed = parse(text)
+            if (tabListsOverlap(parsed.homeTabDescs, parsed.reelsTabDescs, parsed.exploreTabDescs)) {
+                return "Home labels overlap Reels/Explore labels"
+            }
+            return null
+        }
+
+        private fun depthOk(text: String): Boolean {
+            var depth = 0
+            var inString = false
+            var escaped = false
+            for (c in text) {
+                if (inString) {
+                    when {
+                        escaped -> escaped = false
+                        c == '\\' -> escaped = true
+                        c == '"' -> inString = false
+                    }
+                    continue
+                }
+                when (c) {
+                    '"' -> inString = true
+                    '{', '[' -> if (++depth > MAX_JSON_DEPTH) return false
+                    '}', ']' -> if (--depth < 0) return false
+                    // org.json's lenient tokenizer accepts comments and single-quoted
+                    // strings, which would hide brackets from this scan; rules files never need them.
+                    '\'', '/', '#' -> return false
+                }
+            }
+            return true
+        }
+
+        /**
+         * Exact label, or the label followed by badge text ("Reels, 1 new", "Reels 1 new",
+         * "Reels. New").
+         */
+        fun labelMatches(desc: String, candidate: String): Boolean =
+            desc.equals(candidate, ignoreCase = true) ||
+                desc.startsWith("$candidate,", ignoreCase = true) ||
+                desc.startsWith("$candidate ", ignoreCase = true) ||
+                desc.startsWith("$candidate.", ignoreCase = true)
+
+        /** Uses the same prefix matching as detection, in both directions, so e.g. home "Search" can't slip past "Search and explore". */
+        private fun tabListsOverlap(home: List<String>, reels: List<String>, explore: List<String>): Boolean =
+            (reels + explore).any { blocked ->
+                home.any { h -> labelMatches(blocked, h) || labelMatches(h, blocked) }
+            }
 
         private fun parse(json: String): DetectionRules {
             val root = JSONObject(json)
@@ -62,17 +129,28 @@ class DetectionRules(
             fun list(section: String, key: String, idsOnly: Boolean, fallbackList: List<String>): List<String> {
                 val arr = root.optJSONObject(section)?.optJSONArray(key) ?: return fallbackList
                 val items = (0 until minOf(arr.length(), MAX_LIST_ITEMS))
-                    .map { arr.getString(it).trim() }
+                    .map { arr.optString(it, "").trim() }
                     .filter { it.isNotEmpty() && it.length <= MAX_ITEM_LENGTH }
                     .filter { !idsOnly || VIEW_ID_PATTERN.matches(it) }
                 return items.ifEmpty { fallbackList }
             }
+            var reelsTabs = list("reels", "selectedTabDescs", false, fb.reelsTabDescs)
+            var exploreTabs = list("explore", "selectedTabDescs", false, fb.exploreTabDescs)
+            var homeTabs = list("home", "tabDescs", false, fb.homeTabDescs)
+            // A label in both lists would make every screen look like a blocked tab and
+            // turn the Home click into an arbitrary-button clicker, so ignore all three.
+            if (tabListsOverlap(homeTabs, reelsTabs, exploreTabs)) {
+                Log.e(TAG, "Home tab labels overlap Reels/Explore labels, using built-in tab labels")
+                reelsTabs = fb.reelsTabDescs
+                exploreTabs = fb.exploreTabDescs
+                homeTabs = fb.homeTabDescs
+            }
             return DetectionRules(
                 reelsViewIds = list("reels", "viewIds", true, fb.reelsViewIds),
-                reelsTabDescs = list("reels", "selectedTabDescs", false, fb.reelsTabDescs),
+                reelsTabDescs = reelsTabs,
                 exploreViewIds = list("explore", "viewIds", true, fb.exploreViewIds),
-                exploreTabDescs = list("explore", "selectedTabDescs", false, fb.exploreTabDescs),
-                homeTabDescs = list("home", "tabDescs", false, fb.homeTabDescs)
+                exploreTabDescs = exploreTabs,
+                homeTabDescs = homeTabs
             )
         }
 
@@ -80,7 +158,7 @@ class DetectionRules(
             reelsViewIds = listOf("clips_viewer_view_pager", "clips_video_container"),
             reelsTabDescs = listOf("Reels"),
             exploreViewIds = listOf("explore_grid"),
-            exploreTabDescs = listOf("Search and explore", "Explore"),
+            exploreTabDescs = listOf("Search and explore", "Explore", "Search"),
             homeTabDescs = listOf("Home")
         )
     }

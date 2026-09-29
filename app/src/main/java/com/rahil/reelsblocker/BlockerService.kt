@@ -17,8 +17,11 @@ class BlockerService : AccessibilityService() {
 
     private enum class Target { REELS, EXPLORE }
 
-    /** viaTab = the Reels/Explore bottom tab itself is selected (escape by clicking Home); otherwise a viewer opened on top (escape with BACK). */
-    private data class Detection(val target: Target, val viaTab: Boolean)
+    /**
+     * viaTab = the Reels/Explore bottom tab itself is selected, escaped by clicking Home
+     * inside [tabBar]; otherwise a viewer opened on top, escaped with BACK.
+     */
+    private class Detection(val target: Target, val viaTab: Boolean, val tabBar: AccessibilityNodeInfo? = null)
 
     private lateinit var state: BlockerState
     private lateinit var rules: DetectionRules
@@ -30,9 +33,19 @@ class BlockerService : AccessibilityService() {
     private val recentBlocks = ArrayDeque<Long>()
     private var overlayView: View? = null
 
+    // The remote per-id search walks Instagram's whole tree on its UI thread, so it only
+    // runs after a real screen transition (or a re-check we scheduled), never on every
+    // quiet gap in the feed.
+    private var pendingDeep = false
+    private var failedAttempts = 0
+
     // Screens that settle after their last event (e.g. the static Explore grid) would
     // otherwise slip past the throttle, so every event re-arms one trailing re-check.
-    private val trailingCheck = Runnable { runDetection(deepSearch = true) }
+    private val trailingCheck = Runnable { runDetection(deepSearch = pendingDeep) }
+
+    // Separate from trailingCheck so the per-event re-arming can't cancel it: a re-check
+    // scheduled for the end of a cooldown really runs then.
+    private val recheck = Runnable { runDetection(deepSearch = true) }
 
     companion object {
         private const val TAG = "ReelsBlocker"
@@ -42,6 +55,8 @@ class BlockerService : AccessibilityService() {
         private const val ACTION_COOLDOWN_MS = 1500L
         private const val DETECT_THROTTLE_MS = 250L
         private const val TRAILING_CHECK_MS = 350L
+        private const val RETRY_MS = 150L
+        private const val MAX_RETRIES = 5
         private const val RAPID_WINDOW_MS = 10_000L
         private const val RAPID_THRESHOLD = 3
         private const val OVERLAY_MS = 2500L
@@ -77,12 +92,22 @@ class BlockerService : AccessibilityService() {
         if (event.packageName?.toString() != IG) return
         if (!state.isActive()) return
 
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            pendingDeep = true
+            failedAttempts = 0
+        }
+
         handler.removeCallbacks(trailingCheck)
         handler.postDelayed(trailingCheck, TRAILING_CHECK_MS)
 
         if (SystemClock.uptimeMillis() - lastDetectAt < DETECT_THROTTLE_MS) return
 
-        runDetection(deepSearch = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+        runDetection(deepSearch = pendingDeep)
+    }
+
+    private fun scheduleRecheck(delayMs: Long) {
+        handler.removeCallbacks(recheck)
+        handler.postDelayed(recheck, delayMs)
     }
 
     private fun runDetection(deepSearch: Boolean) {
@@ -92,14 +117,15 @@ class BlockerService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != IG) return
 
-        if (state.debugMode && deepSearch) debugLogIds(root)
+        if (deepSearch) pendingDeep = false
+        if (state.debugMode && deepSearch) debugLog(root)
 
         val wantReels = state.blockReels
         val wantExplore = state.blockExplore
         if (!wantReels && !wantExplore) return
 
         val detection = detect(root, wantReels, wantExplore, deepSearch) ?: return
-        block(detection, root)
+        block(detection)
     }
 
     /**
@@ -124,7 +150,8 @@ class BlockerService : AccessibilityService() {
 
             if (idHit == null) {
                 val viewId = node.viewIdResourceName
-                if (viewId != null) {
+                // Preloaded or backgrounded pages stay in the tree; only what's on screen counts.
+                if (viewId != null && node.isVisibleToUser) {
                     if (wantReels && viewId in rules.reelsIdSet) idHit = Target.REELS
                     else if (wantExplore && viewId in rules.exploreIdSet) idHit = Target.EXPLORE
                 }
@@ -135,10 +162,13 @@ class BlockerService : AccessibilityService() {
                 if (!desc.isNullOrBlank()) {
                     val reelsMatch = wantReels && rules.reelsTabDescs.any { descMatches(desc, it) }
                     val exploreMatch = !reelsMatch && wantExplore && rules.exploreTabDescs.any { descMatches(desc, it) }
-                    // Tab-bar context check keeps a selected "Reels" grid tab on a
-                    // profile page (or anything else labeled Reels) from matching.
-                    if ((reelsMatch || exploreMatch) && inBottomTabBar(node)) {
-                        return Detection(if (reelsMatch) Target.REELS else Target.EXPLORE, viaTab = true)
+                    if (reelsMatch || exploreMatch) {
+                        // Tab-bar context keeps a selected "Reels" grid tab on a profile
+                        // page (or anything else labeled Reels) from matching.
+                        val bar = tabBarOf(node)
+                        if (bar != null) {
+                            return Detection(if (reelsMatch) Target.REELS else Target.EXPLORE, viaTab = true, tabBar = bar)
+                        }
                     }
                 }
             }
@@ -147,58 +177,88 @@ class BlockerService : AccessibilityService() {
         }
         idHit?.let { return Detection(it, viaTab = false) }
 
-        // The walk is capped, so on (infrequent) screen transitions also do the full
-        // remote search in case the viewer sits deeper than MAX_NODES.
+        // The walk is capped, so after a screen transition also do the full remote
+        // search in case the viewer sits deeper than MAX_NODES.
         if (deepSearch) {
-            if (wantReels) {
-                for (id in rules.reelsViewIds)
-                    if (root.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id).isNotEmpty())
-                        return Detection(Target.REELS, viaTab = false)
-            }
-            if (wantExplore) {
-                for (id in rules.exploreViewIds)
-                    if (root.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id).isNotEmpty())
-                        return Detection(Target.EXPLORE, viaTab = false)
+            if (wantReels && anyVisible(root, rules.reelsViewIds)) return Detection(Target.REELS, viaTab = false)
+            if (wantExplore && anyVisible(root, rules.exploreViewIds)) return Detection(Target.EXPLORE, viaTab = false)
+        }
+        return null
+    }
+
+    private fun anyVisible(root: AccessibilityNodeInfo, ids: List<String>): Boolean =
+        ids.any { id ->
+            root.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id).any { it.isVisibleToUser }
+        }
+
+    /** Only ever evaluated against selected nodes or tab-bar children, so "Home decor"-style content can't reach it. */
+    private fun descMatches(desc: String, candidate: String): Boolean =
+        DetectionRules.labelMatches(desc, candidate)
+
+    /** The bottom nav container: a real tab sits next to the Home tab; labels are sometimes nested one level down. */
+    private fun tabBarOf(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val parent = node.parent ?: return null
+        if (hasHomeChild(parent)) return parent
+        val grandparent = parent.parent ?: return null
+        return grandparent.takeIf { hasHomeChild(it) }
+    }
+
+    private fun hasHomeChild(container: AccessibilityNodeInfo): Boolean = findHomeTab(container) != null
+
+    /** Only direct children of the tab bar (or their immediate children) — never the whole screen. */
+    private fun findHomeTab(bar: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val count = bar.childCount
+        if (count == 0 || count > 12) return null
+        for (i in 0 until count) {
+            val tab = bar.getChild(i) ?: continue
+            if (isHomeDesc(tab.contentDescription?.toString())) return tab
+            val cc = tab.childCount
+            if (cc in 1..4) {
+                for (j in 0 until cc) {
+                    val label = tab.getChild(j) ?: continue
+                    if (isHomeDesc(label.contentDescription?.toString())) {
+                        return if (tab.isClickable || !label.isClickable) tab else label
+                    }
+                }
             }
         }
         return null
     }
 
-    /** Exact label or "Label,..." prefix — never a bare substring, so "Home decor" can't match "Home". */
-    private fun descMatches(desc: String, candidate: String): Boolean =
-        desc.equals(candidate, ignoreCase = true) ||
-            desc.startsWith("$candidate,", ignoreCase = true)
-
-    /** A real tab lives next to the Home tab; labels are sometimes nested one level down. */
-    private fun inBottomTabBar(node: AccessibilityNodeInfo): Boolean =
-        hasHomeChild(node.parent) || hasHomeChild(node.parent?.parent)
-
-    private fun hasHomeChild(container: AccessibilityNodeInfo?): Boolean {
-        if (container == null) return false
-        val count = container.childCount
-        if (count == 0 || count > 12) return false
-        for (i in 0 until count) {
-            val child = container.getChild(i) ?: continue
-            if (isHomeDesc(child.contentDescription?.toString())) return true
-            val cc = child.childCount
-            if (cc in 1..4) {
-                for (j in 0 until cc) {
-                    val grandchild = child.getChild(j) ?: continue
-                    if (isHomeDesc(grandchild.contentDescription?.toString())) return true
-                }
-            }
-        }
-        return false
-    }
-
     private fun isHomeDesc(desc: String?): Boolean =
         desc != null && rules.homeTabDescs.any { descMatches(desc, it) }
 
-    private fun block(detection: Detection, root: AccessibilityNodeInfo) {
-        val now = SystemClock.uptimeMillis()
-        if (now - lastActionAt < ACTION_COOLDOWN_MS) return
-        lastActionAt = now
+    private fun clickHomeTab(bar: AccessibilityNodeInfo): Boolean {
+        val home = findHomeTab(bar) ?: return false
+        return home.isClickable && home.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
 
+    private fun block(detection: Detection) {
+        val now = SystemClock.uptimeMillis()
+        val remaining = ACTION_COOLDOWN_MS - (now - lastActionAt)
+        if (remaining > 0) {
+            // Still escaping from the last block. A static screen sends no more events,
+            // so re-check when the cooldown ends instead of dropping this detection.
+            scheduleRecheck(remaining + 50)
+            return
+        }
+
+        val performed = if (detection.viaTab) {
+            detection.tabBar?.let { clickHomeTab(it) } == true || safeBack()
+        } else {
+            safeBack()
+        }
+        if (!performed) {
+            // Nothing was pressed (e.g. focus mid-transition), so this isn't a block yet.
+            // Capped so a persistently failing action can't spin deep searches forever.
+            // Later events still attempt the block; they just don't schedule more retries
+            // until a success or a screen change resets the count.
+            if (++failedAttempts <= MAX_RETRIES) scheduleRecheck(RETRY_MS)
+            return
+        }
+
+        failedAttempts = 0
+        lastActionAt = now
         state.incrementToday()
         while (recentBlocks.isNotEmpty() && now - recentBlocks.first() > RAPID_WINDOW_MS) recentBlocks.removeFirst()
         recentBlocks.addLast(now)
@@ -207,34 +267,15 @@ class BlockerService : AccessibilityService() {
 
         if (recentBlocks.size >= RAPID_THRESHOLD) showOverlay(detection.target)
 
-        if (detection.viaTab) {
-            if (!clickHomeTab(root)) safeBack()
-        } else {
-            safeBack()
-        }
+        // A delivered click or BACK can still be ignored by Instagram mid-animation;
+        // verify once the cooldown ends.
+        scheduleRecheck(ACTION_COOLDOWN_MS + 50)
     }
 
     /** BACK goes to whatever window holds focus when it lands — re-check it's still Instagram. */
-    private fun safeBack() {
-        if (rootInActiveWindow?.packageName?.toString() == IG) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
-        }
-    }
-
-    private fun clickHomeTab(root: AccessibilityNodeInfo): Boolean {
-        var visited = 0
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        while (queue.isNotEmpty() && visited < MAX_NODES) {
-            val node = queue.removeFirst()
-            visited++
-            if (isHomeDesc(node.contentDescription?.toString())) {
-                val clickable = if (node.isClickable) node else node.parent?.takeIf { it.isClickable }
-                if (clickable != null) return clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            }
-            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
-        }
-        return false
+    private fun safeBack(): Boolean {
+        if (rootInActiveWindow?.packageName?.toString() != IG) return false
+        return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     private fun showOverlay(target: Target) {
@@ -270,11 +311,17 @@ class BlockerService : AccessibilityService() {
         overlayView = null
     }
 
-    private fun debugLogIds(root: AccessibilityNodeInfo) {
+    /**
+     * Debug mode only. Logs visible view IDs, plus selected nodes' labels (truncated) and
+     * whether each passed the tab-bar check — the two things needed to fix detection
+     * after an Instagram update.
+     */
+    private fun debugLog(root: AccessibilityNodeInfo) {
         val now = SystemClock.uptimeMillis()
         if (now - lastDebugLogAt < 1000) return
         lastDebugLogAt = now
         val ids = LinkedHashSet<String>()
+        val selected = ArrayList<String>()
         var visited = 0
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
@@ -282,8 +329,13 @@ class BlockerService : AccessibilityService() {
             val node = queue.removeFirst()
             visited++
             node.viewIdResourceName?.let { ids.add(it.removePrefix(DetectionRules.IG_ID_PREFIX)) }
+            if (node.isSelected && selected.size < 10) {
+                val desc = node.contentDescription?.toString()?.take(40) ?: "<no desc>"
+                selected.add("\"$desc\" tabBar=${tabBarOf(node) != null}")
+            }
             for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
         }
         Log.d(TAG, "Screen IDs (${ids.size}): ${ids.take(60).joinToString(",")}")
+        Log.d(TAG, "Selected nodes: ${selected.joinToString("; ").ifEmpty { "none" }}")
     }
 }

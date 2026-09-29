@@ -42,6 +42,12 @@ class BlockerState(context: Context) {
 
     fun incrementToday() {
         val key = todayKey()
-        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1).apply()
+        val current = prefs.getInt(key, 0)
+        val editor = prefs.edit()
+        if (current == 0) {
+            // First block of a new day: drop previous days' counters so they don't pile up.
+            prefs.all.keys.filter { it.startsWith("count_") && it != key }.forEach { editor.remove(it) }
+        }
+        editor.putInt(key, current + 1).apply()
     }
 }

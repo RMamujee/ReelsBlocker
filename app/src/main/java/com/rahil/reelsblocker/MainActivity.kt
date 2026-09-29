@@ -14,7 +14,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
-import org.json.JSONObject
 import java.io.File
 import java.util.Date
 
@@ -95,25 +94,58 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    /**
+     * Off the main thread (the picker may hand back a slow cloud file), reading at most
+     * MAX_FILE_BYTES + 1 so a huge or endless stream can't exhaust memory. This process
+     * also hosts the blocker service, so nothing here may crash it.
+     */
     private fun importRulesFrom(uri: Uri) {
-        try {
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            if (bytes == null || bytes.isEmpty()) {
-                Toast.makeText(this, "Could not read that file", Toast.LENGTH_SHORT).show()
-                return
+        // Application context only: a provider that hangs must not pin this Activity.
+        val appContext = applicationContext
+        val mainHandler = Handler(Looper.getMainLooper())
+        Thread {
+            val message = try {
+                val bytes = appContext.contentResolver.openInputStream(uri)?.use { input ->
+                    val buf = ByteArray((DetectionRules.MAX_FILE_BYTES + 1).toInt())
+                    var n = 0
+                    while (n < buf.size) {
+                        val r = input.read(buf, n, buf.size - n)
+                        if (r < 0) break
+                        n += r
+                    }
+                    buf.copyOf(n)
+                }
+                when {
+                    bytes == null || bytes.isEmpty() -> "Could not read that file"
+                    bytes.size > DetectionRules.MAX_FILE_BYTES -> "File too large (max 64KB)"
+                    else -> {
+                        val text = String(bytes, Charsets.UTF_8)
+                        val problem = DetectionRules.checkImport(text)
+                        if (problem != null) {
+                            "Import rejected: $problem"
+                        } else {
+                            val tmp = File.createTempFile("rules", ".tmp", appContext.filesDir)
+                            tmp.writeText(text)
+                            if (!tmp.renameTo(File(appContext.filesDir, "detection_rules.json"))) {
+                                tmp.delete()
+                                throw IllegalStateException("rename failed")
+                            }
+                            null
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                "Import failed"
             }
-            if (bytes.size > DetectionRules.MAX_FILE_BYTES) {
-                Toast.makeText(this, "File too large (max 64KB)", Toast.LENGTH_SHORT).show()
-                return
+            mainHandler.post {
+                if (message == null) {
+                    BlockerService.instance?.reloadRules()
+                    Toast.makeText(appContext, "Rules imported ✓", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                }
             }
-            val text = String(bytes, Charsets.UTF_8)
-            JSONObject(text) // sanity-parse before accepting
-            File(filesDir, "detection_rules.json").writeText(text)
-            BlockerService.instance?.reloadRules()
-            Toast.makeText(this, "Rules imported ✓", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Import failed: not valid JSON", Toast.LENGTH_LONG).show()
-        }
+        }.start()
     }
 
     private fun refresh() {
