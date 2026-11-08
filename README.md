@@ -28,9 +28,9 @@ With **Home feed: friends only** and **Hide ads in the home feed** on (both defa
 
 - **"Sponsored"**: an ad.
 - **"Suggested …"** or a **Follow** button: a suggested post, or a suggested-accounts / suggested-reels carousel.
-- **"You're all caught up"**: everything below it is suggested, so it's all hidden.
+- **"You're all caught up"**: everything below it is suggested, so it's all hidden, and stays hidden after the "caught up" row scrolls off the top.
 
-Post headers are recognised by `feed.postHeaderViewIds` or by the ⋮ menu's label (`feed.postHeaderDescs`). When an ad's header scrolls off the top, the rest of the ad stays hidden because the service remembers which rows it hid; scrolling *up* into an ad is caught by its call-to-action button ("Learn more", "Shop now", …: `feed.adCtaLabels`). These covers let touches through, so the feed scrolls normally under them. They're repositioned on every scroll event (at most ~10 times a second; the text searches only rerun when a new row scrolls in), so a fast fling can show a sliver of a hidden post for a frame.
+Post headers are recognised by `feed.postHeaderViewIds` or by the ⋮ menu's label (`feed.postHeaderDescs`). When an ad's header scrolls off the top, the rest of the ad stays hidden because the service remembers which rows it hid; scrolling *up* into an ad is caught by its call-to-action button ("Learn more", "Shop now", …: `feed.adCtaLabels`). These covers let touches through, so the feed scrolls normally under them. They're repositioned on every scroll event (at most ~10 times a second; the text searches only rerun when a new row scrolls in, or every 2 seconds), so a fast fling can show a sliver of a hidden post for a frame.
 
 Tip: Instagram's own **Following** feed (tap the Instagram logo → Following) has no suggested posts at all, so very little gets covered there.
 

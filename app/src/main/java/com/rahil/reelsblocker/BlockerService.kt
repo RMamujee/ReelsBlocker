@@ -107,6 +107,7 @@ class BlockerService : AccessibilityService() {
     private var rowFlags = HashMap<AccessibilityNodeInfo, Int>()
     private var rowFlagsMode = -1
     private var lastFeedScanAt = 0L
+    private var lastFeedFreshAt = 0L
     private var lastFeedLogAt = 0L
     private val feedTrailing = Runnable { refreshFeedCovers() }
 
@@ -126,6 +127,7 @@ class BlockerService : AccessibilityService() {
     // Separate from trailingCheck so the per-event re-arming can't cancel it: a re-check
     // scheduled for the end of a cooldown really runs then.
     private val recheck = Runnable { runDetection(deepSearch = true) }
+    private val searchGraceEnd = Runnable { runDetection(deepSearch = false) }
 
     // The service only hears Instagram's events, so it can't tell when the user leaves.
     // Covers sit above every app, so while one is on screen (and only then) poll which
@@ -183,6 +185,7 @@ class BlockerService : AccessibilityService() {
         // after the list settles.
         private const val FEED_SCROLL_MS = 100L
         private const val FEED_TRAILING_MS = 150L
+        private const val FEED_RESCAN_MS = 2000L
         private const val MAX_FEED_ROWS = 30
         private const val MAX_FEED_COVERS = 6
         private const val MIN_FEED_COVER_PX = 8
@@ -197,6 +200,8 @@ class BlockerService : AccessibilityService() {
         private const val STORY_SWIPE_MS = 120L
         private const val STORY_SKIP_COOLDOWN_MS = 900L
         private const val STORY_COVER_MS = 800L
+        // Whole word, so a grid post described as "research…" isn't taken for the search bar.
+        private val SEARCH_WORD = Regex("\\bsearch\\b", RegexOption.IGNORE_CASE)
 
         var instance: BlockerService? = null
             private set
@@ -320,7 +325,13 @@ class BlockerService : AccessibilityService() {
         exploreOnScreen = scan.exploreVisible
         // Before the Reels check: an ad's video player mustn't get the whole viewer backed out of.
         val story = scan.storyViewer
-        if (wantStoryAds && story != null && handleStoryAd(story)) return
+        if (wantStoryAds && story != null && handleStoryAd(story)) {
+            // The pass ends here, so drop covers left from the screen under the viewer.
+            covers.hide(COVER_EXPLORE)
+            covers.hide(COVER_REELS_TAB)
+            clearFeedCovers()
+            return
+        }
         val exploreCovered = updateCovers(scan, wantExplore, hideIcon, wantFeed, deepSearch)
         val now = SystemClock.uptimeMillis()
         val searching = scan.searchActive || now < searchGraceUntil
@@ -623,7 +634,7 @@ class BlockerService : AccessibilityService() {
                 }
             }
 
-            if (wantFeed && visible && node.isScrollable) {
+            if (wantFeed && visible && node.isScrollable && scrollsVertically(node)) {
                 node.getBoundsInScreen(bounds)
                 val a = area(bounds)
                 if (a > feedArea) {
@@ -736,6 +747,16 @@ class BlockerService : AccessibilityService() {
 
     private fun area(r: Rect): Long = r.width().toLong() * r.height().toLong()
 
+    /**
+     * The feed scrolls vertically. The camera/DM pager around Home scrolls sideways and is
+     * bigger, so taking it for the feed would put one cover over the whole screen.
+     */
+    private fun scrollsVertically(node: AccessibilityNodeInfo): Boolean {
+        if (node.className?.contains("ViewPager") == true) return false
+        val info = node.collectionInfo ?: return true
+        return !(info.rowCount <= 1 && info.columnCount > 1)
+    }
+
     private fun firstVisible(root: AccessibilityNodeInfo, ids: List<String>): AccessibilityNodeInfo? {
         for (id in ids) {
             root.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id)
@@ -832,7 +853,7 @@ class BlockerService : AccessibilityService() {
     private fun looksLikeSearch(node: AccessibilityNodeInfo): Boolean {
         if (node.isEditable || node.viewIdResourceName in rules.exploreSearchIdSet) return true
         return listOf(node.text, node.contentDescription, node.hintText).any {
-            it?.contains("search", ignoreCase = true) == true
+            it != null && SEARCH_WORD.containsMatchIn(it)
         }
     }
 
@@ -845,6 +866,9 @@ class BlockerService : AccessibilityService() {
         if (!looksLikeSearch(source)) return
         searchGraceUntil = SystemClock.uptimeMillis() + SEARCH_GRACE_MS
         covers.hide(COVER_EXPLORE)
+        // If the tap didn't open search, a static grid sends no more events to bring the cover back.
+        handler.removeCallbacks(searchGraceEnd)
+        handler.postDelayed(searchGraceEnd, SEARCH_GRACE_MS + 50)
         if (state.debugMode) Log.d(TAG, "Search bar tapped: Explore cover off")
     }
 
@@ -869,7 +893,8 @@ class BlockerService : AccessibilityService() {
         } else {
             rootInActiveWindow
         }
-        if (root?.packageName?.toString() != IG || !list.refresh()) {
+        // A list kept in the back stack under a profile or post page still refreshes.
+        if (root?.packageName?.toString() != IG || !list.refresh() || !list.isVisibleToUser) {
             clearFeedCovers()
             return
         }
@@ -882,8 +907,8 @@ class BlockerService : AccessibilityService() {
      * heading) to the next, and a whole group is hidden when its header carries
      * "Sponsored", "Suggested" or a Follow button. Everything after "You're all caught up"
      * is suggested. Markers are found with one text search per label rather than a tree
-     * walk, and only when new rows appear, so this is cheap enough to rerun while
-     * scrolling. Covers pass touches through
+     * walk, and only when new rows appear (or every FEED_RESCAN_MS), so this is cheap
+     * enough to rerun while scrolling. Covers pass touches through
      * so the feed still scrolls under them.
      */
     private fun updateFeedCovers(list: AccessibilityNodeInfo, clipBottom: Int) {
@@ -904,9 +929,13 @@ class BlockerService : AccessibilityService() {
         // Each text search walks Instagram's tree on its UI thread, so they only run when a
         // row has scrolled in since the last pass. A row that stayed attached keeps its
         // content, so its markers carry over and a plain scroll just moves the covers.
+        // A periodic full pass also catches a row whose text was bound after it appeared.
         val mode = (if (hideAds) 1 else 0) or (if (hideSuggested) 2 else 0)
-        val fresh = mode != rowFlagsMode || rows.any { it.node !in rowFlags }
+        if (mode != rowFlagsMode) hiddenRows = HashMap()
+        val fresh = mode != rowFlagsMode || rows.any { it.node !in rowFlags } ||
+            lastFeedScanAt - lastFeedFreshAt > FEED_RESCAN_MS
         if (fresh) {
+            lastFeedFreshAt = lastFeedScanAt
             for (id in rules.feedHeaderViewIds) {
                 markRows(list.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id), rows, listRect, ROW_HEADER)
             }
@@ -939,8 +968,13 @@ class BlockerService : AccessibilityService() {
         var caughtUp = false
         for (i in rows.indices) {
             val f = rows[i].flags
+            if (!caughtUp && f and ROW_CAUGHT_UP == 0 && hiddenRows[rows[i].node] == ROW_CAUGHT_UP) {
+                // Below the "caught up" row, which has scrolled off the top.
+                reasons.fill(groupReason, start, i)
+                caughtUp = true
+            }
             if (caughtUp) {
-                reasons[i] = ROW_SUGGESTED
+                reasons[i] = ROW_CAUGHT_UP
                 continue
             }
             if (f and ROW_CAUGHT_UP != 0) {
