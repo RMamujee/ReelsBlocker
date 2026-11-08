@@ -1,6 +1,8 @@
 package com.rahil.reelsblocker
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
@@ -40,8 +42,18 @@ class BlockerService : AccessibilityService() {
         val reelsTabRect: Rect?,
         val sawDm: Boolean,
         /** A chat, story, call or viewer is on screen: the tab bar may linger hidden in the tree, so no covers. */
-        val coverBlocked: Boolean
+        val coverBlocked: Boolean,
+        /** Home tab selected; feedList is the biggest visible scrolling list on it. */
+        val onHome: Boolean = false,
+        val feedList: AccessibilityNodeInfo? = null,
+        /** The largest visible story-viewer view, so ad checks never see the feed left under it. */
+        val storyViewer: AccessibilityNodeInfo? = null
     )
+
+    /** One child of the home feed list. Instagram splits a post across several rows. */
+    private class FeedRow(val node: AccessibilityNodeInfo, val rect: Rect) {
+        var flags = 0
+    }
 
     private lateinit var state: BlockerState
     private lateinit var rules: DetectionRules
@@ -76,6 +88,30 @@ class BlockerService : AccessibilityService() {
     private var scrollAccum = 0
     private var swipeLock = false
     private var lastScrollLogAt = 0L
+
+    // Explore search: a tap on the search bar hides the grid cover at once and holds off
+    // kicks for SEARCH_GRACE_MS, so the field is usable before Instagram reports focus.
+    // Once the grid's id has been seen, the cover only goes where the grid really is, so
+    // the search/results pages under the Explore tab are never covered.
+    private var exploreOnScreen = false
+    private var searchGraceUntil = 0L
+    private var exploreGridKnown = false
+    private var gridMissRechecked = false
+    private var lastSearchBarBottom = -1
+
+    // Home feed: the list being filtered, and which of its rows were hidden last pass, so
+    // the rest of an ad stays hidden after its header scrolls off the top.
+    private var feedList: AccessibilityNodeInfo? = null
+    private var feedClipBottom = -1
+    private var hiddenRows = HashMap<AccessibilityNodeInfo, Int>()
+    private var rowFlags = HashMap<AccessibilityNodeInfo, Int>()
+    private var rowFlagsMode = -1
+    private var lastFeedScanAt = 0L
+    private var lastFeedLogAt = 0L
+    private val feedTrailing = Runnable { refreshFeedCovers() }
+
+    private var lastStorySkipAt = 0L
+    private val hideStoryCover = Runnable { covers.hide(COVER_STORY_AD) }
 
     // Reels tab cell bounds, keyed by the label node's bounds, so the tab-bar IPC check
     // only reruns when the tab moves.
@@ -141,6 +177,26 @@ class BlockerService : AccessibilityService() {
         private const val MAX_NODES = 350
         // Fallback top edge of the Explore cover when the search bar can't be found.
         private const val FALLBACK_GRID_TOP_FRACTION = 0.16f
+        private const val SEARCH_GRACE_MS = 2000L
+        private const val GRID_MISS_RECHECK_MS = 300L
+        // Feed covers follow scrolling: at most one rescan per FEED_SCROLL_MS, plus one
+        // after the list settles.
+        private const val FEED_SCROLL_MS = 100L
+        private const val FEED_TRAILING_MS = 150L
+        private const val MAX_FEED_ROWS = 30
+        private const val MAX_FEED_COVERS = 6
+        private const val MIN_FEED_COVER_PX = 8
+        private const val ROW_HEADER = 1
+        private const val ROW_AD = 2
+        private const val ROW_SUGGESTED = 4
+        private const val ROW_CAUGHT_UP = 8
+        private const val ROW_CTA = 16
+        /** Rows that begin a new post or section. */
+        private const val ROW_STARTS = ROW_HEADER or ROW_AD or ROW_SUGGESTED or ROW_CAUGHT_UP
+        // A skip swipe plus Instagram's page animation; the next story is checked after.
+        private const val STORY_SWIPE_MS = 120L
+        private const val STORY_SKIP_COOLDOWN_MS = 900L
+        private const val STORY_COVER_MS = 800L
 
         var instance: BlockerService? = null
             private set
@@ -157,6 +213,8 @@ class BlockerService : AccessibilityService() {
 
     fun reloadRules() {
         rules = DetectionRules.load(this)
+        exploreGridKnown = false
+        rowFlags = HashMap()
         Log.i(TAG, "Rules reloaded")
     }
 
@@ -175,9 +233,14 @@ class BlockerService : AccessibilityService() {
         if (event.packageName?.toString() != IG) return
 
         if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            // Scrolls only matter while a DM-shared reel is on screen; everywhere else
-            // they return here, before any other work.
-            if (allowedViewer && state.isActive() && state.blockReels) onViewerScrolled(event)
+            // Scrolls only matter while a DM-shared reel or the filtered home feed is on
+            // screen; everywhere else they return here, before any other work.
+            if (!state.isActive()) return
+            if (allowedViewer && state.blockReels) {
+                onViewerScrolled(event)
+            } else if (feedList != null) {
+                onFeedScrolled(event)
+            }
             return
         }
 
@@ -185,6 +248,12 @@ class BlockerService : AccessibilityService() {
             covers.hideAll()
             resetDmState()
             return
+        }
+
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED
+        ) {
+            onPossibleSearchTap(event)
         }
 
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
@@ -239,14 +308,24 @@ class BlockerService : AccessibilityService() {
         val wantReels = state.blockReels
         val wantExplore = state.blockExplore
         val hideIcon = state.hideReelsIcon
-        if (!wantReels && !wantExplore && !hideIcon) {
+        val wantFeed = state.hideSuggestedPosts || state.hideFeedAds
+        val wantStoryAds = state.skipStoryAds
+        if (!wantReels && !wantExplore && !hideIcon && !wantFeed && !wantStoryAds) {
             covers.hideAll()
+            feedList = null
             return
         }
 
-        val scan = scan(root, wantReels, wantExplore, hideIcon, deepSearch)
-        val exploreCovered = updateCovers(scan, wantExplore, hideIcon, deepSearch)
+        val scan = scan(root, wantReels, wantExplore, hideIcon, wantFeed, wantStoryAds, deepSearch)
+        exploreOnScreen = scan.exploreVisible
+        // Before the Reels check: an ad's video player mustn't get the whole viewer backed out of.
+        val story = scan.storyViewer
+        if (wantStoryAds && story != null && handleStoryAd(story)) return
+        val exploreCovered = updateCovers(scan, wantExplore, hideIcon, wantFeed, deepSearch)
         val now = SystemClock.uptimeMillis()
+        val searching = scan.searchActive || now < searchGraceUntil
+        // Under the Explore tab but off the grid (search page, results): nothing to hide.
+        val offGrid = exploreGridKnown && scan.exploreGridRect == null
 
         val reels = scan.reels
         if (reels == null) {
@@ -270,7 +349,7 @@ class BlockerService : AccessibilityService() {
 
             // Explore is hidden behind a cover rather than kicked, so search stays usable.
             // Kick only if the cover couldn't be placed and Explore is really on top.
-            if (wantExplore && scan.exploreVisible && !scan.searchActive && !scan.coverBlocked && !exploreCovered) {
+            if (wantExplore && scan.exploreVisible && !searching && !offGrid && !scan.coverBlocked && !exploreCovered) {
                 block(Detection(Target.EXPLORE, viaTab = scan.exploreTabBar != null, tabBar = scan.exploreTabBar))
             }
             return
@@ -300,49 +379,88 @@ class BlockerService : AccessibilityService() {
     }
 
     /** Places or removes the covers for this scan. Returns whether the Explore grid is covered. */
-    private fun updateCovers(scan: Scan, wantExplore: Boolean, hideIcon: Boolean, deepSearch: Boolean): Boolean {
+    private fun updateCovers(scan: Scan, wantExplore: Boolean, hideIcon: Boolean, wantFeed: Boolean, deepSearch: Boolean): Boolean {
         if (scan.coverBlocked) {
-            covers.hideAll()
+            // The story-ad cover stays: it hides an ad while it's being skipped.
+            covers.hide(COVER_EXPLORE)
+            covers.hide(COVER_REELS_TAB)
+            clearFeedCovers()
             if (state.debugMode && deepSearch) Log.d(TAG, "Covers: off (chat/story/call/viewer on screen)")
             return false
         }
+        val searching = scan.searchActive || SystemClock.uptimeMillis() < searchGraceUntil
+        if (scan.exploreGridRect != null) exploreGridKnown = true
+        if (scan.exploreVisible && scan.searchBarBottom > 0) lastSearchBarBottom = scan.searchBarBottom
+        val searchBottom = if (scan.searchBarBottom > 0) scan.searchBarBottom else lastSearchBarBottom
+
         var exploreRect: Rect? = null
-        if (wantExplore && scan.exploreVisible && !scan.searchActive) {
-            exploreRect = scan.exploreGridRect?.let { Rect(it) } ?: fallbackGridRect(scan)
-            if (exploreRect != null) {
-                // Never over the search bar or the tab bar.
-                if (scan.searchBarBottom > 0) exploreRect.top = maxOf(exploreRect.top, scan.searchBarBottom)
-                if (scan.tabBarTop > 0) exploreRect.bottom = minOf(exploreRect.bottom, scan.tabBarTop)
-                if (exploreRect.isEmpty) exploreRect = null
+        var keepExplore = false
+        if (wantExplore && scan.exploreVisible && !searching) {
+            if (exploreGridKnown && scan.exploreGridRect == null) {
+                // No grid: a search page under the Explore tab, or the capped walk missed it.
+                // Only a full search can tell, so until then leave the cover as it is.
+                keepExplore = !deepSearch
+                // A full search can also run while the grid is still animating in, and a
+                // static grid sends no more events, so look once more shortly after.
+                if (deepSearch && !gridMissRechecked) {
+                    gridMissRechecked = true
+                    scheduleRecheck(GRID_MISS_RECHECK_MS)
+                }
+            } else {
+                gridMissRechecked = false
+                exploreRect = scan.exploreGridRect?.let { Rect(it) } ?: fallbackGridRect(scan, searchBottom)
+                if (exploreRect != null) {
+                    // Never over the search bar or the tab bar.
+                    if (searchBottom > 0) exploreRect.top = maxOf(exploreRect.top, searchBottom)
+                    if (scan.tabBarTop > 0) exploreRect.bottom = minOf(exploreRect.bottom, scan.tabBarTop)
+                    if (exploreRect.isEmpty) exploreRect = null
+                }
             }
         }
         if (exploreRect != null) {
             covers.show(COVER_EXPLORE, exploreRect, getString(R.string.explore_cover))
-        } else {
+        } else if (!keepExplore) {
             covers.hide(COVER_EXPLORE)
         }
 
         val reelsRect = if (hideIcon) scan.reelsTabRect else null
         if (reelsRect != null) covers.show(COVER_REELS_TAB, reelsRect) else covers.hide(COVER_REELS_TAB)
 
+        val list = scan.feedList
+        if (wantFeed && scan.onHome && list != null) {
+            feedList = list
+            feedClipBottom = scan.tabBarTop
+            updateFeedCovers(list, scan.tabBarTop)
+        } else {
+            clearFeedCovers()
+        }
+
         if (state.debugMode && deepSearch) {
             Log.d(
                 TAG,
-                "Covers: explore=$exploreRect (grid=${scan.exploreGridRect}, search=${scan.searchActive}) " +
-                    "reelsTab=$reelsRect"
+                "Covers: explore=$exploreRect (grid=${scan.exploreGridRect}, search=$searching, kept=$keepExplore) " +
+                    "reelsTab=$reelsRect feed=${feedList != null}"
             )
         }
         ensureWatchdog()
-        return exploreRect != null && covers.has(COVER_EXPLORE)
+        return covers.has(COVER_EXPLORE)
+    }
+
+    private fun clearFeedCovers() {
+        feedList = null
+        hiddenRows = HashMap()
+        rowFlags = HashMap()
+        handler.removeCallbacks(feedTrailing)
+        covers.hideWithPrefix(COVER_FEED)
     }
 
     /** Everything between the search bar and the tab bar, for when the grid's id isn't known. */
-    private fun fallbackGridRect(scan: Scan): Rect? {
+    private fun fallbackGridRect(scan: Scan, searchBottom: Int): Rect? {
         val bar = scan.exploreTabBar ?: return null
         if (scan.tabBarTop <= 0) return null
         val barBounds = Rect().also { bar.getBoundsInScreen(it) }
-        val top = if (scan.searchBarBottom > 0) {
-            scan.searchBarBottom
+        val top = if (searchBottom > 0) {
+            searchBottom
         } else {
             (resources.displayMetrics.heightPixels * FALLBACK_GRID_TOP_FRACTION).toInt()
         }
@@ -425,10 +543,12 @@ class BlockerService : AccessibilityService() {
         wantReels: Boolean,
         wantExplore: Boolean,
         hideIcon: Boolean,
+        wantFeed: Boolean,
+        wantStoryAds: Boolean,
         deepSearch: Boolean
     ): Scan {
         val checkDm = wantReels && state.allowDmReels
-        val wantCovers = hideIcon || wantExplore
+        val wantCovers = hideIcon || wantExplore || wantFeed
         val screenHeight = resources.displayMetrics.heightPixels
         val searchZoneBottom = screenHeight * 35 / 100
         var coverBlocked = false
@@ -442,6 +562,11 @@ class BlockerService : AccessibilityService() {
         var reelsTabRect: Rect? = null
         var reelsTabChecked = false
         var sawDm = false
+        var onHome = false
+        var feedList: AccessibilityNodeInfo? = null
+        var feedArea = 0L
+        var storyViewer: AccessibilityNodeInfo? = null
+        var storyArea = 0L
         val bounds = Rect()
 
         var visited = 0
@@ -462,6 +587,14 @@ class BlockerService : AccessibilityService() {
                     if (exploreGrid == null || area(bounds) > area(exploreGrid)) exploreGrid = Rect(bounds)
                 }
                 if (checkDm && !sawDm) sawDm = rules.isDmViewId(viewId)
+                if (wantStoryAds && rules.isStoryViewId(viewId)) {
+                    node.getBoundsInScreen(bounds)
+                    val a = area(bounds)
+                    if (a > storyArea) {
+                        storyArea = a
+                        storyViewer = node
+                    }
+                }
                 if (wantCovers && !coverBlocked) {
                     coverBlocked = viewId in rules.reelsIdSet || rules.isDmViewId(viewId) ||
                         rules.isNoCoverViewId(viewId)
@@ -481,11 +614,35 @@ class BlockerService : AccessibilityService() {
                     // tab bar was, so never cover it, whatever screen it's on.
                     coverBlocked = true
                 }
+            } else if (wantExplore && visible && looksLikeSearch(node)) {
+                // Newer builds show a tappable "Search" box that only turns into a text
+                // field on its own page; it still marks where the cover has to stop.
+                node.getBoundsInScreen(bounds)
+                if (bounds.top < searchZoneBottom && bounds.height() < screenHeight / 8) {
+                    searchBarBottom = maxOf(searchBarBottom, bounds.bottom)
+                }
+            }
+
+            if (wantFeed && visible && node.isScrollable) {
+                node.getBoundsInScreen(bounds)
+                val a = area(bounds)
+                if (a > feedArea) {
+                    feedArea = a
+                    feedList = node
+                }
             }
 
             val desc = node.contentDescription?.toString()
             if (!desc.isNullOrBlank()) {
                 val isReelsLabel = rules.reelsTabDescs.any { descMatches(desc, it) }
+                if (node.isSelected && wantFeed && !onHome && isHomeDesc(desc)) {
+                    val bar = tabBarOf(node)
+                    if (bar != null) {
+                        onHome = true
+                        bar.getBoundsInScreen(bounds)
+                        if (tabBarTop <= 0) tabBarTop = bounds.top
+                    }
+                }
                 if (node.isSelected) {
                     val exploreMatch = !isReelsLabel && wantExplore && rules.exploreTabDescs.any { descMatches(desc, it) }
                     if ((isReelsLabel && wantReels) || exploreMatch) {
@@ -498,7 +655,8 @@ class BlockerService : AccessibilityService() {
                                     reels = Detection(Target.REELS, viaTab = true, tabBar = bar),
                                     exploreVisible = false, exploreTabBar = null, exploreGridRect = null,
                                     searchActive = false, searchBarBottom = -1, tabBarTop = -1,
-                                    reelsTabRect = null, sawDm = false, coverBlocked = false
+                                    reelsTabRect = null, sawDm = false, coverBlocked = false,
+                                    storyViewer = storyViewer
                                 )
                             }
                             exploreTabBar = bar
@@ -569,7 +727,10 @@ class BlockerService : AccessibilityService() {
             tabBarTop = tabBarTop,
             reelsTabRect = reelsTabRect,
             sawDm = sawDm,
-            coverBlocked = coverBlocked || (wantCovers && reelsViewer)
+            coverBlocked = coverBlocked || (wantCovers && reelsViewer),
+            onHome = onHome,
+            feedList = if (onHome) feedList else null,
+            storyViewer = storyViewer
         )
     }
 
@@ -658,11 +819,275 @@ class BlockerService : AccessibilityService() {
 
         Log.i(TAG, "Blocked ${detection.target} (viaTab=${detection.viaTab}, today=${state.todayCount()})")
 
-        if (recentBlocks.size >= RAPID_THRESHOLD) showOverlay(detection.target)
+        // Explore is covered rather than kicked in normal use, and a full-screen overlay
+        // there would sit on top of the search bar.
+        if (recentBlocks.size >= RAPID_THRESHOLD && detection.target == Target.REELS) showOverlay(detection.target)
 
         // A delivered click or BACK can still be ignored by Instagram mid-animation;
         // verify once the cooldown ends.
         scheduleRecheck(ACTION_COOLDOWN_MS + 50)
+    }
+
+    /** The Explore search bar: a text field, a known id, or a "Search" label (also "Ask Meta AI or Search"). */
+    private fun looksLikeSearch(node: AccessibilityNodeInfo): Boolean {
+        if (node.isEditable || node.viewIdResourceName in rules.exploreSearchIdSet) return true
+        return listOf(node.text, node.contentDescription, node.hintText).any {
+            it?.contains("search", ignoreCase = true) == true
+        }
+    }
+
+    /** A tap on the Explore search bar uncovers the page at once, before focus is reported. */
+    private fun onPossibleSearchTap(event: AccessibilityEvent) {
+        if (!state.blockExplore || !exploreOnScreen) return
+        val source = event.source ?: return
+        val b = Rect().also { source.getBoundsInScreen(it) }
+        if (b.top >= resources.displayMetrics.heightPixels * 35 / 100) return
+        if (!looksLikeSearch(source)) return
+        searchGraceUntil = SystemClock.uptimeMillis() + SEARCH_GRACE_MS
+        covers.hide(COVER_EXPLORE)
+        if (state.debugMode) Log.d(TAG, "Search bar tapped: Explore cover off")
+    }
+
+    private fun onFeedScrolled(event: AccessibilityEvent) {
+        val list = feedList ?: return
+        if (event.source != list) return
+        handler.removeCallbacks(feedTrailing)
+        handler.postDelayed(feedTrailing, FEED_TRAILING_MS)
+        if (SystemClock.uptimeMillis() - lastFeedScanAt < FEED_SCROLL_MS) return
+        refreshFeedCovers()
+    }
+
+    private fun refreshFeedCovers() {
+        val list = feedList ?: return
+        if (!state.isActive() || !(state.hideSuggestedPosts || state.hideFeedAds)) {
+            clearFeedCovers()
+            return
+        }
+        // Same rule as every other screen read: only while Instagram is in front.
+        val root = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getRootInActiveWindow(0)
+        } else {
+            rootInActiveWindow
+        }
+        if (root?.packageName?.toString() != IG || !list.refresh()) {
+            clearFeedCovers()
+            return
+        }
+        updateFeedCovers(list, feedClipBottom)
+    }
+
+    /**
+     * Hides ads and suggested posts in the home feed behind covers that follow the list.
+     * A post spans several rows, so rows are grouped from one post header (or section
+     * heading) to the next, and a whole group is hidden when its header carries
+     * "Sponsored", "Suggested" or a Follow button. Everything after "You're all caught up"
+     * is suggested. Markers are found with one text search per label rather than a tree
+     * walk, and only when new rows appear, so this is cheap enough to rerun while
+     * scrolling. Covers pass touches through
+     * so the feed still scrolls under them.
+     */
+    private fun updateFeedCovers(list: AccessibilityNodeInfo, clipBottom: Int) {
+        lastFeedScanAt = SystemClock.uptimeMillis()
+        val hideAds = state.hideFeedAds
+        val hideSuggested = state.hideSuggestedPosts
+        val listRect = Rect().also { list.getBoundsInScreen(it) }
+        if (clipBottom > 0 && clipBottom < listRect.bottom) listRect.bottom = clipBottom
+
+        val rows = ArrayList<FeedRow>()
+        for (i in 0 until minOf(list.childCount, MAX_FEED_ROWS)) {
+            val node = list.getChild(i) ?: continue
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            if (r.intersect(listRect)) rows.add(FeedRow(node, r))
+        }
+        rows.sortBy { it.rect.top }
+
+        // Each text search walks Instagram's tree on its UI thread, so they only run when a
+        // row has scrolled in since the last pass. A row that stayed attached keeps its
+        // content, so its markers carry over and a plain scroll just moves the covers.
+        val mode = (if (hideAds) 1 else 0) or (if (hideSuggested) 2 else 0)
+        val fresh = mode != rowFlagsMode || rows.any { it.node !in rowFlags }
+        if (fresh) {
+            for (id in rules.feedHeaderViewIds) {
+                markRows(list.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id), rows, listRect, ROW_HEADER)
+            }
+            markLabels(list, rows, listRect, rules.feedHeaderDescs, ROW_HEADER, contains = false)
+            if (hideAds) markLabels(list, rows, listRect, rules.sponsoredLabels, ROW_AD, contains = false)
+            if (hideSuggested) {
+                markLabels(list, rows, listRect, rules.suggestedLabels, ROW_SUGGESTED, contains = false)
+                markLabels(list, rows, listRect, rules.followLabels, ROW_SUGGESTED, contains = false)
+                markLabels(list, rows, listRect, rules.caughtUpLabels, ROW_CAUGHT_UP, contains = true)
+            }
+        } else {
+            for (row in rows) row.flags = rowFlags[row.node] ?: 0
+        }
+
+        // Rows above the first header belong to a post whose header is off screen: hidden
+        // if they were last pass, or if an ad's call-to-action bar is among them.
+        val firstStart = rows.indexOfFirst { it.flags and ROW_STARTS != 0 }
+        val orphanEnd = if (firstStart < 0) rows.size else firstStart
+        var groupReason = (0 until orphanEnd).firstNotNullOfOrNull { hiddenRows[rows[it].node] } ?: 0
+        if (fresh && groupReason == 0 && hideAds && orphanEnd > 0) {
+            markLabels(list, rows, listRect, rules.adCtaLabels, ROW_CTA, contains = false)
+        }
+        if (fresh) {
+            rowFlags = rows.associateTo(HashMap()) { it.node to it.flags }
+            rowFlagsMode = mode
+        }
+
+        val reasons = IntArray(rows.size)
+        var start = 0
+        var caughtUp = false
+        for (i in rows.indices) {
+            val f = rows[i].flags
+            if (caughtUp) {
+                reasons[i] = ROW_SUGGESTED
+                continue
+            }
+            if (f and ROW_CAUGHT_UP != 0) {
+                // The "caught up" row itself stays visible as the end of the friends feed.
+                reasons.fill(groupReason, start, i)
+                caughtUp = true
+                continue
+            }
+            if (f and ROW_STARTS != 0) {
+                reasons.fill(groupReason, start, i)
+                start = i
+                groupReason = 0
+            }
+            // An ad button only identifies rows whose header is off screen: a friend's post
+            // can carry "Learn more" or "Shop now" too.
+            if (f and ROW_AD != 0 || (f and ROW_CTA != 0 && i < orphanEnd)) {
+                groupReason = ROW_AD
+            } else if (f and ROW_SUGGESTED != 0 && groupReason == 0) {
+                groupReason = ROW_SUGGESTED
+            }
+        }
+        if (!caughtUp) reasons.fill(groupReason, start, rows.size)
+
+        val nowHidden = HashMap<AccessibilityNodeInfo, Int>()
+        var shown = 0
+        var i = 0
+        while (i < rows.size) {
+            if (reasons[i] == 0) {
+                i++
+                continue
+            }
+            val rect = Rect(rows[i].rect)
+            var reason = reasons[i]
+            var j = i
+            while (j < rows.size && reasons[j] != 0) {
+                rect.union(rows[j].rect)
+                if (reasons[j] == ROW_AD) reason = ROW_AD
+                nowHidden[rows[j].node] = reasons[j]
+                j++
+            }
+            rect.left = listRect.left
+            rect.right = listRect.right
+            if (shown < MAX_FEED_COVERS && rect.height() >= MIN_FEED_COVER_PX) {
+                val label = getString(if (reason == ROW_AD) R.string.feed_cover_ad else R.string.feed_cover_suggested)
+                covers.show(COVER_FEED + shown, rect, label, touchable = false)
+                shown++
+            }
+            i = j
+        }
+        for (k in shown until MAX_FEED_COVERS) covers.hide(COVER_FEED + k)
+        hiddenRows = nowHidden
+        if (shown > 0) ensureWatchdog()
+
+        if (state.debugMode && lastFeedScanAt - lastFeedLogAt > 1000) {
+            lastFeedLogAt = lastFeedScanAt
+            val summary = rows.indices.joinToString(" ") { rowCode(rows[it].flags) + if (reasons[it] != 0) "*" else "" }
+            Log.d(TAG, "Feed rows (H=header A=ad S=suggested C=caught-up T=ad button, *=hidden): $summary")
+        }
+    }
+
+    private fun rowCode(flags: Int): String = buildString {
+        if (flags and ROW_HEADER != 0) append('H')
+        if (flags and ROW_AD != 0) append('A')
+        if (flags and ROW_SUGGESTED != 0) append('S')
+        if (flags and ROW_CAUGHT_UP != 0) append('C')
+        if (flags and ROW_CTA != 0) append('T')
+        if (isEmpty()) append('.')
+    }
+
+    private fun markLabels(
+        list: AccessibilityNodeInfo,
+        rows: List<FeedRow>,
+        listRect: Rect,
+        labels: List<String>,
+        flag: Int,
+        contains: Boolean
+    ) {
+        for (label in labels) {
+            // The search is a case-insensitive "contains"; narrow it to the label itself.
+            val hits = list.findAccessibilityNodeInfosByText(label).filter { n ->
+                listOfNotNull(n.text?.toString(), n.contentDescription?.toString()).any {
+                    if (contains) it.contains(label, ignoreCase = true) else DetectionRules.labelMatches(it, label)
+                }
+            }
+            markRows(hits, rows, listRect, flag)
+        }
+    }
+
+    /** Flags the row each visible node sits in. */
+    private fun markRows(nodes: List<AccessibilityNodeInfo>, rows: List<FeedRow>, listRect: Rect, flag: Int) {
+        val b = Rect()
+        for (n in nodes) {
+            if (!n.isVisibleToUser) continue
+            n.getBoundsInScreen(b)
+            if (!b.intersect(listRect)) continue
+            val y = b.centerY()
+            rows.firstOrNull { y >= it.rect.top && y < it.rect.bottom }?.let { it.flags = it.flags or flag }
+        }
+    }
+
+    /**
+     * A story ad is marked "Sponsored" under the account name at the top. Swipes on to the
+     * next account's stories, which skips every card of the ad, behind a brief cover.
+     * Returns true while an ad is being skipped, so nothing else acts on that screen.
+     */
+    private fun handleStoryAd(viewer: AccessibilityNodeInfo): Boolean {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastStorySkipAt < STORY_SKIP_COOLDOWN_MS) return covers.has(COVER_STORY_AD)
+        // Searched inside the viewer and its bounds only: the home feed stays in the tree
+        // under it, and a "Sponsored" post there must not skip a friend's story.
+        val screen = Rect().also { viewer.getBoundsInScreen(it) }
+        if (screen.isEmpty) return false
+        val topZone = screen.top + screen.height() / 3
+        val b = Rect()
+        val isAd = rules.sponsoredLabels.any { label ->
+            viewer.findAccessibilityNodeInfosByText(label).any { n ->
+                n.isVisibleToUser &&
+                    listOfNotNull(n.text?.toString(), n.contentDescription?.toString())
+                        .any { DetectionRules.labelMatches(it, label) } &&
+                    b.also { n.getBoundsInScreen(it) }.let { screen.contains(it) && it.top < topZone }
+            }
+        }
+        if (!isAd) return false
+
+        // The viewer's own bounds, so in split screen the swipe and cover stay on Instagram.
+        val y = screen.exactCenterY()
+        val path = Path().apply {
+            moveTo(screen.left + screen.width() * 0.85f, y)
+            lineTo(screen.left + screen.width() * 0.15f, y)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, STORY_SWIPE_MS))
+            .build()
+        if (!dispatchGesture(gesture, null, null)) {
+            Log.w(TAG, "Story ad found but the skip swipe was refused")
+            return false
+        }
+        lastStorySkipAt = now
+        // Touches pass through, so the cover can't catch the swipe it hides.
+        covers.show(COVER_STORY_AD, screen, getString(R.string.story_ad_cover), touchable = false)
+        ensureWatchdog()
+        handler.removeCallbacks(hideStoryCover)
+        handler.postDelayed(hideStoryCover, STORY_COVER_MS)
+        // Back-to-back ads, or a swipe Instagram ignored: look again once it settles.
+        scheduleRecheck(STORY_SKIP_COOLDOWN_MS + 50)
+        Log.i(TAG, "Skipped a story ad")
+        return true
     }
 
     /** BACK goes to whatever window holds focus when it lands — re-check it's still Instagram. */
@@ -735,3 +1160,5 @@ class BlockerService : AccessibilityService() {
 
 private const val COVER_EXPLORE = "explore"
 private const val COVER_REELS_TAB = "reelsTab"
+private const val COVER_FEED = "feed"
+private const val COVER_STORY_AD = "storyAd"

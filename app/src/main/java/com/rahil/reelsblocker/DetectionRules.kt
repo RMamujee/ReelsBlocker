@@ -24,7 +24,22 @@ class DetectionRules(
     val dmViewIds: List<String>,
     val dmViewIdPrefixes: List<String>,
     /** Full-screen surfaces (stories, calls, viewers) that may leave a hidden tab bar in the tree; no covers while one is showing. */
-    val noCoverViewIdPrefixes: List<String>
+    val noCoverViewIdPrefixes: List<String>,
+    /** The Explore search bar, which must never be covered. */
+    val exploreSearchViewIds: List<String>,
+    /** Home feed: the row that starts each post, by id or by its overflow-menu label. */
+    val feedHeaderViewIds: List<String>,
+    val feedHeaderDescs: List<String>,
+    /** "Sponsored" under the author's name, in feed posts and story ads. */
+    val sponsoredLabels: List<String>,
+    /** Posts and carousels from accounts the user doesn't follow. */
+    val suggestedLabels: List<String>,
+    val followLabels: List<String>,
+    /** "You're all caught up": everything after it is suggested. Matched anywhere in the text. */
+    val caughtUpLabels: List<String>,
+    /** An ad's call-to-action bar, to recognise an ad whose header scrolled off the top. */
+    val adCtaLabels: List<String>,
+    val storyViewIdPrefixes: List<String>
 ) {
     /** Fully-qualified resource ids for O(1) membership checks during the tree walk. */
     val reelsIdSet: Set<String> = reelsViewIds.map { IG_ID_PREFIX + it }.toHashSet()
@@ -33,11 +48,15 @@ class DetectionRules(
     private val dmFullPrefixes: List<String> = dmViewIdPrefixes.map { IG_ID_PREFIX + it }
 
     private val noCoverFullPrefixes: List<String> = noCoverViewIdPrefixes.map { IG_ID_PREFIX + it }
+    val exploreSearchIdSet: Set<String> = exploreSearchViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    private val storyFullPrefixes: List<String> = storyViewIdPrefixes.map { IG_ID_PREFIX + it }
 
     fun isDmViewId(viewId: String): Boolean =
         viewId in dmIdSet || dmFullPrefixes.any { viewId.startsWith(it) }
 
     fun isNoCoverViewId(viewId: String): Boolean = noCoverFullPrefixes.any { viewId.startsWith(it) }
+
+    fun isStoryViewId(viewId: String): Boolean = storyFullPrefixes.any { viewId.startsWith(it) }
 
     companion object {
         private const val TAG = "ReelsBlocker"
@@ -86,8 +105,8 @@ class DetectionRules(
             } catch (t: Throwable) {
                 return "Not valid JSON"
             }
-            if (listOf("reels", "explore", "home", "dm", "noCover").none { root.has(it) }) {
-                return "No reels/explore/home/dm/noCover sections found"
+            if (listOf("reels", "explore", "home", "feed", "stories", "dm", "noCover").none { root.has(it) }) {
+                return "No reels/explore/home/feed/stories/dm/noCover sections found"
             }
             val parsed = parse(text)
             if (tabListsOverlap(parsed.homeTabDescs, parsed.reelsTabDescs, parsed.exploreTabDescs)) {
@@ -167,7 +186,16 @@ class DetectionRules(
                 homeTabDescs = homeTabs,
                 dmViewIds = list("dm", "viewIds", true, fb.dmViewIds),
                 dmViewIdPrefixes = list("dm", "viewIdPrefixes", true, fb.dmViewIdPrefixes),
-                noCoverViewIdPrefixes = list("noCover", "viewIdPrefixes", true, fb.noCoverViewIdPrefixes)
+                noCoverViewIdPrefixes = list("noCover", "viewIdPrefixes", true, fb.noCoverViewIdPrefixes),
+                exploreSearchViewIds = list("explore", "searchViewIds", true, fb.exploreSearchViewIds),
+                feedHeaderViewIds = list("feed", "postHeaderViewIds", true, fb.feedHeaderViewIds),
+                feedHeaderDescs = list("feed", "postHeaderDescs", false, fb.feedHeaderDescs),
+                sponsoredLabels = list("feed", "sponsoredLabels", false, fb.sponsoredLabels),
+                suggestedLabels = list("feed", "suggestedLabels", false, fb.suggestedLabels),
+                followLabels = list("feed", "followLabels", false, fb.followLabels),
+                caughtUpLabels = list("feed", "caughtUpLabels", false, fb.caughtUpLabels),
+                adCtaLabels = list("feed", "adCtaLabels", false, fb.adCtaLabels),
+                storyViewIdPrefixes = list("stories", "viewIdPrefixes", true, fb.storyViewIdPrefixes)
             )
         }
 
@@ -179,7 +207,16 @@ class DetectionRules(
             homeTabDescs = listOf("Home"),
             dmViewIds = listOf("row_thread_composer_edittext", "row_thread_composer_container", "direct_thread_fragment_container"),
             dmViewIdPrefixes = listOf("row_thread_composer", "direct_thread"),
-            noCoverViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer")
+            noCoverViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer"),
+            exploreSearchViewIds = listOf("action_bar_search_edit_text", "action_bar_search_hints_text_layout", "search_edit_text"),
+            feedHeaderViewIds = listOf("row_feed_profile_header", "row_feed_photo_profile_header"),
+            feedHeaderDescs = listOf("More options", "More actions"),
+            sponsoredLabels = listOf("Sponsored"),
+            suggestedLabels = listOf("Suggested"),
+            followLabels = listOf("Follow"),
+            caughtUpLabels = listOf("all caught up", "completely caught up"),
+            adCtaLabels = listOf("Learn more", "Shop now", "Install now", "Sign up", "Book now", "Download"),
+            storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer")
         )
     }
 }

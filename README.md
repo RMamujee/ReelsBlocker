@@ -1,6 +1,6 @@
 # Reels Blocker
 
-Personal Android app that kicks you out of Instagram **Reels** and **Explore** the moment you land on them, while leaving DMs, stories, and the home feed alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
+Personal Android app that strips Instagram down to your friends. It kicks you out of **Reels**, hides **Explore** (search still works), hides **ads and suggested posts** in the home feed, and **skips ads between stories**. DMs, friends' stories and friends' posts are left alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
 
 ## How it works
 
@@ -9,18 +9,36 @@ An `AccessibilityService` (`BlockerService`) receives window events **from Insta
 1. **Selected bottom tab**: a selected node in the bottom tab bar whose content description matches "Reels" / "Search and explore". Escaped by clicking the Home tab inside that same tab bar (BACK from a tab can behave oddly).
 2. **View IDs**: Instagram's internal IDs for the clips viewer / explore grid (e.g. `clips_viewer_view_pager`), counted only when visible on screen. Escaped with a BACK press. Catches reels opened from the feed, DMs, or notifications.
 
-After each block there's a 1.5s cooldown so one escape can't fire twice mid-animation, and the service re-checks the screen when the cooldown ends. If you get blocked 3+ times within 10 seconds, a full-screen "Blocked 🎯" overlay appears for 2.5s as a stronger nudge. Every block increments a daily counter shown in the app.
+After each block there's a 1.5s cooldown so one escape can't fire twice mid-animation, and the service re-checks the screen when the cooldown ends. If you get kicked out of Reels 3+ times within 10 seconds, a full-screen "Blocked 🎯" overlay appears for 2.5s as a stronger nudge. Every block increments a daily counter shown in the app.
 
 ### Covers: the Reels icon and the Explore grid
 
-Two things are hidden behind opaque patches (accessibility overlays matched to Instagram's black/white background) instead of being kicked:
+Two things on the tab screens are hidden behind opaque patches (accessibility overlays matched to Instagram's black/white background) instead of being kicked:
 
 - **The Reels tab icon** ("Hide the Reels tab icon"): its tab cell is covered and taps on it do nothing. The Reels tab is still blocked underneath if you ever reach it.
-- **The Explore grid** ("Hide the Explore grid"): on the Search tab, the grid of recommended posts is covered but the search bar isn't. Tap it and search for accounts as normal. The cover disappears while the search bar is focused or holds a query, so results show normally. Reels opened from search results are still blocked (except ones reached from DMs). If the grid's view ID isn't known, the cover spans from the search bar down to the tab bar. Only if no cover can be placed does it fall back to the old kick-to-Home.
+- **The Explore grid** ("Hide the Explore grid"): on the Search tab, the grid of recommended posts is covered but the search bar isn't. Tap it and search for accounts as normal. The cover disappears the moment you tap the search bar (before Instagram even reports the field as focused) and stays off while it's focused or holds a query, so you can type straight away. Once the grid's view ID has been seen, the cover is only drawn where the grid actually is, so Instagram's separate search and results pages are never covered. Newer builds show a tappable "Search" (or "Ask Meta AI or Search") box instead of a text field; that counts as the search bar too, and the last known bottom edge of the bar is remembered so the cover never creeps up over it. Reels opened from search results are still blocked (except ones reached from DMs). If the grid's view ID isn't known, the cover spans from the search bar down to the tab bar. Only if no cover can be placed does it fall back to the old kick-to-Home.
 
 Covers only exist while the thing they hide is on screen. Instagram can leave the hidden tab bar in its screen data under a chat, story, call or reel viewer, so a cover is never drawn while one of those is showing. They're recognised by the DM ids, the reels viewer ids, and the `noCover.viewIdPrefixes` list in the rules file. The Reels icon cover also requires a visible tab bar in the bottom quarter of the screen.
 
 Overlays sit above every app, and the service only hears from Instagram. So while a cover is showing, and only then, the service checks twice a second which app is in front and removes the covers the moment it isn't Instagram. In chats, stories, calls and viewers there are no covers, so there's no check either. The DM-reel feature doesn't poll at all.
+
+### Home feed: friends only, no ads
+
+With **Home feed: friends only** and **Hide ads in the home feed** on (both default), posts that aren't from people you follow are hidden behind covers labelled "Ad hidden" / "Suggested post hidden". Instagram splits one post across several list rows, so the service groups rows from one post header to the next and hides the whole group when its header shows:
+
+- **"Sponsored"**: an ad.
+- **"Suggested …"** or a **Follow** button: a suggested post, or a suggested-accounts / suggested-reels carousel.
+- **"You're all caught up"**: everything below it is suggested, so it's all hidden.
+
+Post headers are recognised by `feed.postHeaderViewIds` or by the ⋮ menu's label (`feed.postHeaderDescs`). When an ad's header scrolls off the top, the rest of the ad stays hidden because the service remembers which rows it hid; scrolling *up* into an ad is caught by its call-to-action button ("Learn more", "Shop now", …: `feed.adCtaLabels`). These covers let touches through, so the feed scrolls normally under them. They're repositioned on every scroll event (at most ~10 times a second; the text searches only rerun when a new row scrolls in), so a fast fling can show a sliver of a hidden post for a frame.
+
+Tip: Instagram's own **Following** feed (tap the Instagram logo → Following) has no suggested posts at all, so very little gets covered there.
+
+If ads or suggested posts slip through, turn on Debug mode and scroll the feed: `Feed rows (H=header A=ad S=suggested C=caught-up T=ad button, *=hidden): ...` lines show what each visible row was recognised as. A post with no `H` means its header changed; add the new id or label to the `feed` section.
+
+### Story ads
+
+With **Skip ads between stories** on (the default), a story whose header shows "Sponsored" is skipped with a swipe to the next account's stories, behind a brief "Skipping ad…" cover that lets the swipe through. That skips every card of the ad. The service looks again after the swipe settles, so back-to-back ads are skipped too. The story viewer is recognised by `stories.viewIdPrefixes`, and the label by `feed.sponsoredLabels` (both locale-specific: add your language's "Sponsored").
 
 ### Reels friends send you
 

@@ -37,6 +37,9 @@ class MainActivity : AppCompatActivity() {
         val swReels = findViewById<SwitchMaterial>(R.id.sw_reels)
         val swExplore = findViewById<SwitchMaterial>(R.id.sw_explore)
         val swHideIcon = findViewById<SwitchMaterial>(R.id.sw_hide_reels_icon)
+        val swSuggested = findViewById<SwitchMaterial>(R.id.sw_hide_suggested)
+        val swFeedAds = findViewById<SwitchMaterial>(R.id.sw_hide_feed_ads)
+        val swStoryAds = findViewById<SwitchMaterial>(R.id.sw_skip_story_ads)
         val swDmReels = findViewById<SwitchMaterial>(R.id.sw_dm_reels)
         val swDebug = findViewById<SwitchMaterial>(R.id.sw_debug)
 
@@ -44,6 +47,9 @@ class MainActivity : AppCompatActivity() {
         swReels.isChecked = state.blockReels
         swExplore.isChecked = state.blockExplore
         swHideIcon.isChecked = state.hideReelsIcon
+        swSuggested.isChecked = state.hideSuggestedPosts
+        swFeedAds.isChecked = state.hideFeedAds
+        swStoryAds.isChecked = state.skipStoryAds
         swDmReels.isChecked = state.allowDmReels
         swDebug.isChecked = state.debugMode
 
@@ -51,6 +57,9 @@ class MainActivity : AppCompatActivity() {
         swReels.setOnCheckedChangeListener { _, checked -> state.blockReels = checked }
         swExplore.setOnCheckedChangeListener { _, checked -> state.blockExplore = checked }
         swHideIcon.setOnCheckedChangeListener { _, checked -> state.hideReelsIcon = checked }
+        swSuggested.setOnCheckedChangeListener { _, checked -> state.hideSuggestedPosts = checked }
+        swFeedAds.setOnCheckedChangeListener { _, checked -> state.hideFeedAds = checked }
+        swStoryAds.setOnCheckedChangeListener { _, checked -> state.skipStoryAds = checked }
         swDmReels.setOnCheckedChangeListener { _, checked -> state.allowDmReels = checked }
         swDebug.setOnCheckedChangeListener { _, checked -> state.debugMode = checked }
 

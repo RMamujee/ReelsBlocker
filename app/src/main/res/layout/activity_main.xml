@@ -93,6 +93,24 @@
                     android:text="@string/hide_reels_icon" />
 
                 <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_hide_suggested"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/hide_suggested" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_hide_feed_ads"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/hide_feed_ads" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_skip_story_ads"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/skip_story_ads" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/sw_dm_reels"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

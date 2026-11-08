@@ -31,6 +31,18 @@ class BlockerState(context: Context) {
         get() = prefs.getBoolean("allow_dm_reels", true)
         set(v) = prefs.edit().putBoolean("allow_dm_reels", v).apply()
 
+    var hideSuggestedPosts: Boolean
+        get() = prefs.getBoolean("hide_suggested", true)
+        set(v) = prefs.edit().putBoolean("hide_suggested", v).apply()
+
+    var hideFeedAds: Boolean
+        get() = prefs.getBoolean("hide_feed_ads", true)
+        set(v) = prefs.edit().putBoolean("hide_feed_ads", v).apply()
+
+    var skipStoryAds: Boolean
+        get() = prefs.getBoolean("skip_story_ads", true)
+        set(v) = prefs.edit().putBoolean("skip_story_ads", v).apply()
+
     var debugMode: Boolean
         get() = prefs.getBoolean("debug", false)
         set(v) = prefs.edit().putBoolean("debug", v).apply()

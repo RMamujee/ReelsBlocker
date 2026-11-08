@@ -14,12 +14,12 @@ import android.widget.TextView
 
 /**
  * Opaque patches drawn over parts of Instagram's screen (the Reels tab icon, the Explore
- * grid). Accessibility overlays sit above every app, so the caller must hide them the
+ * grid, ads and suggested posts in the feed, a story ad being skipped). Accessibility overlays sit above every app, so the caller must hide them the
  * moment Instagram leaves the foreground.
  */
 class CoverManager(private val service: AccessibilityService) {
 
-    private class Cover(val view: View, val rect: Rect)
+    private class Cover(val view: View, val rect: Rect, val label: String?, val touchable: Boolean)
 
     private val wm = service.getSystemService(AccessibilityService.WINDOW_SERVICE) as WindowManager
     private val covers = HashMap<String, Cover>()
@@ -28,26 +28,32 @@ class CoverManager(private val service: AccessibilityService) {
 
     fun has(key: String): Boolean = key in covers
 
-    fun show(key: String, rect: Rect, label: String? = null) {
+    /**
+     * [touchable] covers swallow taps (the Reels icon, the Explore grid). Feed and story
+     * covers pass touches through so the feed still scrolls and gestures still land.
+     */
+    fun show(key: String, rect: Rect, label: String? = null, touchable: Boolean = true) {
         if (rect.width() <= 0 || rect.height() <= 0) {
             hide(key)
             return
         }
         val existing = covers[key]
-        if (existing != null) {
-            if (existing.rect == rect) return
+        if (existing != null && (existing.label != label || existing.touchable != touchable)) hide(key)
+        val current = covers[key]
+        if (current != null) {
+            if (current.rect == rect) return
             try {
-                wm.updateViewLayout(existing.view, params(rect))
-                covers[key] = Cover(existing.view, Rect(rect))
+                wm.updateViewLayout(current.view, params(rect, touchable))
+                covers[key] = Cover(current.view, Rect(rect), label, touchable)
             } catch (e: Exception) {
                 hide(key)
             }
             return
         }
-        val view = buildView(label)
+        val view = buildView(label, touchable)
         try {
-            wm.addView(view, params(rect))
-            covers[key] = Cover(view, Rect(rect))
+            wm.addView(view, params(rect, touchable))
+            covers[key] = Cover(view, Rect(rect), label, touchable)
         } catch (e: Exception) {
             Log.e(TAG, "Cover failed", e)
         }
@@ -66,14 +72,18 @@ class CoverManager(private val service: AccessibilityService) {
         covers.keys.toList().forEach { hide(it) }
     }
 
-    private fun params(rect: Rect) = WindowManager.LayoutParams(
+    fun hideWithPrefix(prefix: String) {
+        covers.keys.filter { it.startsWith(prefix) }.forEach { hide(it) }
+    }
+
+    private fun params(rect: Rect, touchable: Boolean) = WindowManager.LayoutParams(
         rect.width(),
         rect.height(),
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-        // Touchable on purpose: taps on a cover must not reach the icon or grid under it.
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+            (if (touchable) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE),
         PixelFormat.OPAQUE
     ).apply {
         // getBoundsInScreen coordinates are absolute, so position from the screen's
@@ -87,7 +97,7 @@ class CoverManager(private val service: AccessibilityService) {
     }
 
     /** Instagram follows the system theme by default: pure black in dark mode, white in light. */
-    private fun buildView(label: String?): View {
+    private fun buildView(label: String?, touchable: Boolean): View {
         val night = (service.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
         val bg = if (night) Color.BLACK else Color.WHITE
@@ -102,7 +112,7 @@ class CoverManager(private val service: AccessibilityService) {
             }
         }
         view.setBackgroundColor(bg)
-        view.isClickable = true
+        view.isClickable = touchable
         return view
     }
 

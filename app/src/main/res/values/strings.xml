@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">Reels Blocker</string>
-    <string name="service_description">Watches Instagram only. When you land on Reels or Explore, it backs you out and shows a reminder. No data leaves your phone.</string>
+    <string name="service_description">Watches Instagram only. When you land on Reels or Explore, it backs you out or hides the page. It also hides ads and suggested posts in your feed and skips story ads. No data leaves your phone.</string>
 
     <string name="status_service_on">Blocker service: RUNNING</string>
     <string name="status_service_off">Blocker service: NOT ENABLED</string>
@@ -13,6 +13,12 @@
     <string name="block_explore">Hide the Explore grid (searching for accounts still works)</string>
     <string name="hide_reels_icon">Hide the Reels tab icon</string>
     <string name="explore_cover">Explore hidden. Tap the search bar above to find accounts.</string>
+    <string name="hide_suggested">Home feed: friends only (hide suggested posts and accounts)</string>
+    <string name="hide_feed_ads">Hide ads in the home feed</string>
+    <string name="skip_story_ads">Skip ads between stories</string>
+    <string name="feed_cover_ad">Ad hidden</string>
+    <string name="feed_cover_suggested">Suggested post hidden</string>
+    <string name="story_ad_cover">Skipping ad…</string>
     <string name="allow_dm_reels">Allow reels friends send in DMs (only the one you tap; swiping on gets blocked)</string>
 
     <string name="pause_title">Take a break from blocking</string>

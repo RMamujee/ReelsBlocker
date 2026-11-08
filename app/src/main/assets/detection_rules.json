@@ -1,6 +1,6 @@
 {
-  "version": 3,
-  "comment": "View IDs are bare (package prefix added in code, letters/digits/underscore only). Instagram renames these across updates - discover current ones with Debug mode + 'adb logcat -s ReelsBlocker', then update this file and use the in-app 'Import rules file' button (no reinstall needed). Tab descriptions must match the bottom-nav labels EXACTLY (or 'Label,...' prefix) and are locale-specific: on a non-English phone add the translated labels to selectedTabDescs and home.tabDescs (e.g. Spanish: 'Inicio', 'Buscar y explorar').",
+  "version": 4,
+  "comment": "View IDs are bare (package prefix added in code, letters/digits/underscore only). Instagram renames these across updates - discover current ones with Debug mode + 'adb logcat -s ReelsBlocker', then update this file and use the in-app 'Import rules file' button (no reinstall needed). Tab descriptions must match the bottom-nav labels EXACTLY (or 'Label,...' prefix) and are locale-specific: on a non-English phone add the translated labels to selectedTabDescs and home.tabDescs (e.g. Spanish: 'Inicio', 'Buscar y explorar'). The feed and stories label lists are locale-specific too.",
   "reels": {
     "viewIds": [
       "clips_viewer_view_pager",
@@ -17,10 +17,27 @@
       "explore_topical_nested_recycler_view",
       "explore_recycler_view"
     ],
-    "selectedTabDescs": ["Search and explore", "Search and Explore", "Explore", "Search"]
+    "selectedTabDescs": ["Search and explore", "Search and Explore", "Explore", "Search"],
+    "searchViewIds": [
+      "action_bar_search_edit_text",
+      "action_bar_search_hints_text_layout",
+      "search_edit_text"
+    ]
   },
   "home": {
     "tabDescs": ["Home"]
+  },
+  "feed": {
+    "postHeaderViewIds": ["row_feed_profile_header", "row_feed_photo_profile_header"],
+    "postHeaderDescs": ["More options", "More actions"],
+    "sponsoredLabels": ["Sponsored"],
+    "suggestedLabels": ["Suggested"],
+    "followLabels": ["Follow"],
+    "caughtUpLabels": ["all caught up", "completely caught up"],
+    "adCtaLabels": ["Learn more", "Shop now", "Install now", "Sign up", "Book now", "Download"]
+  },
+  "stories": {
+    "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer"]
   },
   "dm": {
     "viewIds": [
