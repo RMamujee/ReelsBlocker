@@ -1,6 +1,11 @@
 # Reels Blocker
 
-Personal Android app that strips Instagram down to your friends. It kicks you out of **Reels**, hides **Explore** (search still works), scrolls past **ads and suggested posts** in the home feed, and **skips ads between stories**. DMs, friends' stories and friends' posts are left alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
+Personal Android app that strips Instagram down to your friends. It comes as two parts:
+
+- **Insta Clean** (its own launcher icon): Instagram's website inside the app, with ads, suggested posts, the Reels feed and the Explore grid removed from the page as it loads, the way a browser ad blocker works. Nothing is covered or skipped; it simply isn't there. See [Insta Clean](#insta-clean-the-in-app-instagram).
+- **Reels Blocker** (the accessibility service): for when you open the real Instagram app.
+
+The rest of this section is about the second part. It kicks you out of **Reels**, hides **Explore** (search still works), scrolls past **ads and suggested posts** in the home feed, and **skips ads between stories**. DMs, friends' stories and friends' posts are left alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
 
 ## How it works
 
@@ -52,6 +57,21 @@ With **Allow reels friends send in DMs** on (the default), a reel you open strai
 
 If DM reels still get blocked, the chat screen's IDs have changed. With Debug mode on, open a chat and look for its IDs in `adb logcat -s ReelsBlocker`, then add them to `dm.viewIds`. If swiping on isn't blocked, the `DM-reel scroll` log lines show what the pager reports.
 
+## Insta Clean: the in-app Instagram
+
+`FeedActivity` loads `https://www.instagram.com/` in a WebView, with its own login (cookies stay in the app). A filter script, `app/src/main/assets/web_filter.js`, is installed with `WebViewCompat.addDocumentStartJavaScript`, so it runs on Instagram's pages before any of Instagram's own code, and a `MutationObserver` checks every element as it's added, before it's painted. It uses the same switches as the main screen.
+
+- **Feed**: a post is removed when its header says "Ad"/"Sponsored"/"Paid partnership", or "Suggested for you" or has a Follow button (accounts you follow don't). "Suggestions for you" account strips go too. Instagram's feed is a virtual list that pads its bottom for the posts it expects below, counting removed ones, so the filter sets that padding to zero: the feed ends at the last post from someone you follow, with a note under it, and more slot in as Instagram loads them. No blank screens.
+- **Reels**: the Reels tab is gone and the endless Reels feed (`/reels/`) never opens. A single reel (`/reel/<id>/`, from a friend, a chat or a profile) is just a post with one video and opens normally.
+- **Explore**: the grid tiles (links to posts and reels) are removed; the search box and its results (links to profiles, tags, places) stay.
+- **Story ads**: a story whose header says "Ad" makes the page fully transparent (so you see black) and every card of the ad is tapped past straight away, the way the right side of a story is tapped to advance.
+- **"Use the app" prompts**: dialogs and banners pushing the app are removed, and the page scroll they lock is unlocked.
+- The page is kept clear of the status bar, navigation bar and keyboard, and Instagram's bottom bar hides while you type.
+
+Only Instagram and Meta's login pages load inside; every other link (including Instagram's `l.instagram.com` redirects) opens in your browser. Camera and microphone requests are refused; picking photos to post works. It's the website, so there are no push notifications, and some app-only features (e.g. posting reels or stories with effects) aren't there.
+
+If Instagram changes its page and something slips through: debug builds allow Chrome DevTools to attach (`chrome://inspect`, or `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`), and with Debug mode on the filter logs `[rb]` lines to the console. Labels live at the top of `web_filter.js`.
+
 ## When Instagram updates break detection
 
 Instagram renames its view IDs regularly. Detection rules live in `app/src/main/assets/detection_rules.json`, and an imported copy in the app's private files dir **overrides the built-in one without reinstalling**:
@@ -89,4 +109,4 @@ APK lands at `app\build\outputs\apk\debug\app-debug.apk`.
 
 ## Privacy
 
-Everything is on-device. The service reads the screen only when Instagram is in front, and hears other apps only while one of its covers is showing, and then only to notice their window coming to the front. It has no network permission and no analytics, and nothing leaves the phone.
+Everything is on-device. The service reads the screen only when Instagram is in front, and hears other apps only while one of its covers is showing, and then only to notice their window coming to the front. The app has the internet permission only for Insta Clean, which talks to Instagram (and Meta's login pages) and nothing else; the blocker service never uses the network. No analytics, and nothing else leaves the phone.

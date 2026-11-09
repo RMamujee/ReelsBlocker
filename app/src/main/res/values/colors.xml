@@ -3,4 +3,5 @@
     <color name="overlay_bg">#F2101223</color>
     <color name="overlay_text">#FFFFFFFF</color>
     <color name="overlay_sub">#B3FFFFFF</color>
+    <color name="ic_feed_background">#2E7D6B</color>
 </resources>

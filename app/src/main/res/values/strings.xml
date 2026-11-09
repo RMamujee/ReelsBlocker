@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">Reels Blocker</string>
+    <string name="feed_app_name">Insta Clean</string>
     <string name="service_description">Works in Instagram only. When you land on Reels or Explore, it backs you out or hides the page. It also scrolls past ads and suggested posts in your feed and skips story ads. While one of its covers is showing it also notices other apps coming to the front, only to remove the covers the moment you leave Instagram. No data leaves your phone.</string>
 
     <string name="status_service_on">Blocker service: RUNNING</string>

@@ -2,6 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Only the in-app Instagram (FeedActivity) uses the network; the blocker service doesn't. -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application
         android:allowBackup="false"
@@ -13,6 +15,23 @@
         <activity
             android:name=".MainActivity"
             android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Its own launcher icon: Instagram's website with the filter built in. -->
+        <activity
+            android:name=".FeedActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:icon="@mipmap/ic_feed"
+            android:label="@string/feed_app_name"
+            android:launchMode="singleTask"
+            android:taskAffinity="com.rahil.reelsblocker.feed"
+            android:theme="@style/Theme.ReelsBlocker.Feed"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
