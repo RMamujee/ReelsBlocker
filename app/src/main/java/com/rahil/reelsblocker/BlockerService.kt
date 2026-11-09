@@ -54,7 +54,8 @@ class BlockerService : AccessibilityService() {
     )
 
     /** One child of the home feed list. Instagram splits a post across several rows. */
-    private class FeedRow(val node: AccessibilityNodeInfo, val rect: Rect) {
+    /** [pos] is the row's position in the whole list, or -1 if it isn't known. */
+    private class FeedRow(val node: AccessibilityNodeInfo, val rect: Rect, var pos: Int) {
         var flags = 0
     }
 
@@ -103,14 +104,15 @@ class BlockerService : AccessibilityService() {
     private var lastSearchBarBottom = -1
 
     // Home feed: the list being filtered, the part of it not under the top bar, stories row
-    // or tab bar, and which rows were unwanted last pass, so the rest of an ad is still
-    // known after its header scrolls off.
+    // or tab bar, and (by list position) which rows were unwanted last pass, so the rest of
+    // an ad is still known after its header scrolls off.
     private var feedList: AccessibilityNodeInfo? = null
     private var feedClipTop = -1
     private var feedClipBottom = -1
-    private var badRows = HashMap<AccessibilityNodeInfo, Int>()
+    private var badPositions = HashMap<Int, Int>()
     private var rowFlags = HashMap<AccessibilityNodeInfo, Int>()
     private var rowFlagsMode = -1
+    private var caughtUpPos = -1
     private var lastFeedScanAt = 0L
     private var lastFeedFreshAt = 0L
     private var lastFeedLogAt = 0L
@@ -121,7 +123,21 @@ class BlockerService : AccessibilityService() {
     private var skipUntil = 0L
     private var skipDirection = 0
     private var skipsWithoutUser = 0
-    private val feedSettled = Runnable { refreshFeed() }
+    // Goes through the full screen check, so a skip never lands on a story, chat or sheet
+    // opened just as the feed stopped.
+    private val feedSettled = Runnable { runDetection(deepSearch = false) }
+
+    // A popup from another app (a notification, the volume panel) takes the covers down;
+    // this puts them back if Instagram is still in front, or confirms the user left.
+    private val confirmLeft = Runnable {
+        val pkg = rootInActiveWindow?.packageName?.toString()
+        if (pkg == IG) {
+            runDetection(deepSearch = true)
+        } else if (pkg != null && pkg != SYSTEM_UI) {
+            resetDmState()
+        }
+    }
+    private var watchingAllApps = false
 
     private var lastStorySkipAt = 0L
     private val hideStoryCover = Runnable { covers.hide(COVER_STORY_AD) }
@@ -150,6 +166,7 @@ class BlockerService : AccessibilityService() {
         override fun run() {
             if (!covers.isShowing) {
                 watchdogRunning = false
+                watchAllApps(false)
                 return
             }
             // Only the package name is needed, so skip prefetching the window's nodes.
@@ -164,7 +181,7 @@ class BlockerService : AccessibilityService() {
             watchdogMisses = if (pkg == null) watchdogMisses + 1 else 0
             if ((pkg != null && pkg != IG) || watchdogMisses >= WATCHDOG_MAX_MISSES) {
                 watchdogMisses = 0
-                leftInstagram(pkg ?: "")
+                leftInstagram()
                 watchdogRunning = false
                 return
             }
@@ -203,7 +220,10 @@ class BlockerService : AccessibilityService() {
         private const val FEED_RESCAN_MS = 2000L
         private const val MAX_FEED_ROWS = 30
         private const val MIN_SEARCH_LABEL = 4
-        // Skipped once it fills this share of the feed, or reaches its middle.
+        // Skipped once it reaches the near quarter of the feed or fills 60% of it; the end
+        // of the friends feed once it fills 30% or reaches the middle.
+        private const val SKIP_EDGE_SHARE = 0.25f
+        private const val SKIP_FILL_SHARE = 0.6f
         private const val SKIP_MIN_SHARE = 0.3f
         private const val SKIP_MOVE_PX_PER_MS = 6f
         private const val SKIP_MIN_MOVE_MS = 150L
@@ -212,6 +232,13 @@ class BlockerService : AccessibilityService() {
         private const val SKIP_SETTLE_MS = 200L
         private const val MAX_FEED_COVERS = 4
         private const val MIN_SKIP_PX = 24
+        // Upward skips start this far down the feed, clear of the status and top bars.
+        private const val SWIPE_UP_START_SHARE = 0.2f
+        // Scroll events this soon after a skip are still the skip's own.
+        private const val USER_SCROLL_GAP_MS = 300L
+        private const val CONFIRM_LEFT_MS = 400L
+        // The top bar alone is well under this share of the feed; with the stories row, over.
+        private const val STORIES_SHOWING_SHARE = 0.15f
         private const val SWIPE_EDGE_PX = 40
         // A skip that keeps failing (or a run of ads) stops until the user scrolls again.
         private const val MAX_SKIPS_WITHOUT_USER = 8
@@ -246,6 +273,9 @@ class BlockerService : AccessibilityService() {
         rules = DetectionRules.load(this)
         exploreGridKnown = false
         rowFlags = HashMap()
+        rowFlagsMode = -1
+        badPositions = HashMap()
+        caughtUpPos = -1
         Log.i(TAG, "Rules reloaded")
     }
 
@@ -263,15 +293,16 @@ class BlockerService : AccessibilityService() {
         if (!::state.isInitialized) return
         val pkg = event.packageName?.toString()
         if (pkg != IG) {
-            // Events from every app arrive so leaving Instagram is noticed at once: another
-            // app's window coming to the front takes the covers down. Nothing else from
-            // other apps is read. The keyboard opening over Instagram isn't leaving it.
+            // Other apps' events only arrive while a cover is showing (see watchAllApps), so
+            // leaving Instagram is noticed at once: another app's window coming to the front
+            // takes the covers down. Nothing else from other apps is read. The keyboard
+            // opening over Instagram isn't leaving it.
             // This app's own covers aren't activities, so they can't trigger it.
             val ownCover = pkg == packageName && event.className?.endsWith("Activity") != true
             if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && pkg != null &&
                 !ownCover && event.className?.contains("SoftInputWindow") != true && !isInputMethod(pkg)
             ) {
-                leftInstagram(pkg)
+                leftInstagram()
             }
             return
         }
@@ -318,11 +349,32 @@ class BlockerService : AccessibilityService() {
         return ime != null && ime.startsWith("$pkg/")
     }
 
-    private fun leftInstagram(pkg: String) {
+    /**
+     * Another app's window came to the front. Covers come down at once, and checks Instagram
+     * scheduled on its way out are cancelled so they can't put them back over the launcher.
+     * A popup over Instagram (a notification, the volume panel) isn't leaving it, so the
+     * screen is looked at again shortly and the covers come back if Instagram is still there.
+     */
+    private fun leftInstagram() {
         if (covers.isShowing) covers.hideAll()
         handler.removeCallbacks(feedSettled)
-        // The notification shade or recents over Instagram isn't leaving it.
-        if (pkg != SYSTEM_UI) resetDmState()
+        handler.removeCallbacks(trailingCheck)
+        handler.removeCallbacks(recheck)
+        handler.removeCallbacks(searchGraceEnd)
+        handler.removeCallbacks(confirmLeft)
+        handler.postDelayed(confirmLeft, CONFIRM_LEFT_MS)
+    }
+
+    /**
+     * Other apps' events are only needed while a cover is on screen, to notice leaving.
+     * The rest of the time the service hears Instagram only.
+     */
+    private fun watchAllApps(on: Boolean) {
+        if (on == watchingAllApps) return
+        val info = serviceInfo ?: return
+        info.packageNames = if (on) null else arrayOf(IG)
+        serviceInfo = info
+        watchingAllApps = on
     }
 
     private fun scheduleRecheck(delayMs: Long) {
@@ -338,7 +390,9 @@ class BlockerService : AccessibilityService() {
     }
 
     private fun ensureWatchdog() {
-        if (watchdogRunning || !covers.isShowing) return
+        if (!covers.isShowing) return
+        watchAllApps(true)
+        if (watchdogRunning) return
         watchdogRunning = true
         handler.postDelayed(watchdog, WATCHDOG_MS)
     }
@@ -493,8 +547,7 @@ class BlockerService : AccessibilityService() {
             feedList = list
             feedClipTop = scan.feedTop
             feedClipBottom = scan.tabBarTop
-            val still = SystemClock.uptimeMillis() - lastFeedScrollAt >= FEED_SETTLE_MS
-            updateFeed(list, allowSkip = still)
+            updateFeed(list, still = SystemClock.uptimeMillis() - lastFeedScrollAt >= FEED_SETTLE_MS)
         } else {
             clearFeed()
         }
@@ -513,7 +566,8 @@ class BlockerService : AccessibilityService() {
     private fun clearFeed() {
         feedList = null
         lastFeedFrom = -1
-        badRows = HashMap()
+        badPositions = HashMap()
+        caughtUpPos = -1
         rowFlags = HashMap()
         handler.removeCallbacks(feedSettled)
         covers.hideWithPrefix(COVER_FEED)
@@ -632,6 +686,7 @@ class BlockerService : AccessibilityService() {
         var feedList: AccessibilityNodeInfo? = null
         var feedArea = 1L
         var feedTop = -1
+        var feedPage = false
         var storyViewer: AccessibilityNodeInfo? = null
         var storyArea = 0L
         val bounds = Rect()
@@ -697,6 +752,11 @@ class BlockerService : AccessibilityService() {
             if (wantFeed && visible && viewId != null && viewId in rules.feedTopIdSet) {
                 node.getBoundsInScreen(bounds)
                 if (bounds.top < screenHeight / 3) feedTop = maxOf(feedTop, bounds.bottom)
+            }
+            // The Following and Favorites feeds open over Home without the tab bar.
+            if (wantFeed && visible && !feedPage && viewId != null && viewId in rules.feedPageTitleIdSet) {
+                val title = node.text?.toString() ?: node.contentDescription?.toString()
+                if (title != null && rules.feedPageTitles.any { title.equals(it, ignoreCase = true) }) feedPage = true
             }
 
             if (wantFeed && visible && node.isScrollable && scrollsVertically(node)) {
@@ -804,8 +864,8 @@ class BlockerService : AccessibilityService() {
             reelsTabRect = reelsTabRect,
             sawDm = sawDm,
             coverBlocked = coverBlocked || (wantCovers && reelsViewer),
-            onHome = onHome,
-            feedList = if (onHome) feedList else null,
+            onHome = onHome || feedPage,
+            feedList = if (onHome || feedPage) feedList else null,
             feedTop = feedTop,
             storyViewer = storyViewer
         )
@@ -956,9 +1016,8 @@ class BlockerService : AccessibilityService() {
         lastFeedScrollAt = now
         // Resting covers come off the moment the feed moves, so they never drag behind it.
         covers.hideWithPrefix(COVER_FEED)
-        // The user's own scrolling re-arms the runaway guard and sets the skip direction;
-        // the skip swipe's doesn't. Rows are reused as the list scrolls, so the direction
-        // comes from the first visible position (or the scroll delta), not row positions.
+        // Rows are reused as the list scrolls, so the direction comes from the first visible
+        // position (or the scroll delta), not from row positions.
         val from = event.fromIndex
         val dy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) event.scrollDeltaY else 0
         val dir = when {
@@ -967,9 +1026,14 @@ class BlockerService : AccessibilityService() {
             else -> 0
         }
         if (from >= 0) lastFeedFrom = from
-        // Movement against a running skip can only be the user: they win at once.
-        if (now < skipUntil && dir != 0 && dir != skipDirection) skipUntil = 0L
-        if (now >= skipUntil) {
+        // Back at the top: a pull-to-refresh can insert posts, so the remembered end of the
+        // friends feed no longer holds.
+        if (from == 0) caughtUpPos = -1
+        // The skip swipe's own scroll events (and its tail) don't count as the user's, except
+        // movement against it, which can only be the user: they win at once.
+        val against = dir != 0 && dir != skipDirection && now < skipUntil + USER_SCROLL_GAP_MS
+        if (against) skipUntil = 0L
+        if (against || now >= skipUntil + USER_SCROLL_GAP_MS) {
             skipsWithoutUser = 0
             if (dir != 0) feedDirection = dir
         }
@@ -977,41 +1041,27 @@ class BlockerService : AccessibilityService() {
         handler.postDelayed(feedSettled, maxOf(FEED_SETTLE_MS, skipUntil - now + 20))
     }
 
-    private fun refreshFeed() {
-        val list = feedList ?: return
-        if (!state.isActive() || !(state.hideSuggestedPosts || state.hideFeedAds)) {
-            clearFeed()
-            return
-        }
-        // Same rule as every other screen read: only while Instagram is in front.
-        val root = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getRootInActiveWindow(0)
-        } else {
-            rootInActiveWindow
-        }
-        // A list kept in the back stack under a profile or post page still refreshes.
-        if (root?.packageName?.toString() != IG || !list.refresh() || !list.isVisibleToUser) {
-            clearFeed()
-            return
-        }
-        updateFeed(list, allowSkip = true)
-    }
-
     /**
      * Finds ads and suggested posts in the home feed and, once the feed is still, scrolls
-     * them out of view. Nothing is drawn over the feed: covers can only be moved about ten
-     * times a second, so on a moving list they visibly drag.
+     * them out of view. Nothing is drawn over the feed while it moves: covers can only be
+     * moved about ten times a second, so on a moving list they visibly drag.
      *
      * A post spans several rows, so rows are grouped from one post header (or section
-     * heading) to the next. A group is an ad when it carries "Sponsored" or an ad's
+     * heading) to the next. A group is an ad when it carries "Sponsored"/"Ad" or an ad's
      * call-to-action bar, and suggested when its header has a Follow button (accounts the
      * user already follows don't get one) or it's a "Suggested for you" section. Everything
      * after "You're all caught up" is suggested, so the feed is pushed back up to that line
-     * instead of skipping through endless suggestions. Markers are found with id and text
-     * searches rather than a tree walk, and only when new rows appear (or every
-     * FEED_RESCAN_MS).
+     * instead of skipping through endless suggestions.
+     *
+     * Instagram reuses row views for new posts as the list scrolls, so markers are searched
+     * again after every scroll, and what's remembered between passes (the unwanted rows, the
+     * caught-up line) is keyed by list position, never by the reused view.
      */
-    private fun updateFeed(list: AccessibilityNodeInfo, allowSkip: Boolean) {
+    private fun updateFeed(list: AccessibilityNodeInfo, still: Boolean) {
+        if (!still) {
+            covers.hideWithPrefix(COVER_FEED)
+            return
+        }
         val now = SystemClock.uptimeMillis()
         lastFeedScanAt = now
         val hideAds = state.hideFeedAds
@@ -1021,22 +1071,34 @@ class BlockerService : AccessibilityService() {
         val view = Rect(full)
         if (feedClipTop > view.top && feedClipTop < view.bottom) view.top = feedClipTop
         if (feedClipBottom > view.top && feedClipBottom < view.bottom) view.bottom = feedClipBottom
+        if (view.height() <= 0) return
 
         val rows = ArrayList<FeedRow>()
         for (i in 0 until minOf(list.childCount, MAX_FEED_ROWS)) {
             val node = list.getChild(i) ?: continue
             val r = Rect().also { node.getBoundsInScreen(it) }
-            if (r.intersect(full)) rows.add(FeedRow(node, r))
+            if (r.intersect(full)) rows.add(FeedRow(node, r, node.collectionItemInfo?.rowIndex ?: -1))
         }
         rows.sortBy { it.rect.top }
+        // Instagram's rows don't report their list position, but scroll events report the
+        // first visible one, and the rows on screen follow on from it.
+        if (rows.any { it.pos < 0 }) {
+            rows.forEachIndexed { k, row -> row.pos = if (lastFeedFrom >= 0) lastFeedFrom + k else -1 }
+        }
 
-        // Each search walks Instagram's tree on its UI thread, so they only run when a row
-        // has scrolled in since the last pass. A row that stayed attached keeps its content.
+        // Each search walks Instagram's tree on its UI thread, so results are reused while
+        // nothing has scrolled (a playing video keeps sending events). Never across a
+        // scroll: the list reuses its views for other posts as it moves.
         val mode = (if (hideAds) 1 else 0) or (if (hideSuggested) 2 else 0)
-        if (mode != rowFlagsMode) badRows = HashMap()
-        val fresh = mode != rowFlagsMode || rows.any { it.node !in rowFlags } ||
-            now - lastFeedFreshAt > FEED_RESCAN_MS
-        if (fresh) {
+        if (mode != rowFlagsMode) {
+            badPositions = HashMap()
+            caughtUpPos = -1
+        }
+        val reuse = mode == rowFlagsMode && lastFeedScrollAt < lastFeedFreshAt &&
+            now - lastFeedFreshAt < FEED_RESCAN_MS && rows.all { it.node in rowFlags }
+        if (reuse) {
+            for (row in rows) row.flags = rowFlags[row.node] ?: 0
+        } else {
             val t0 = SystemClock.uptimeMillis()
             lastFeedFreshAt = now
             markIds(list, rules.feedHeaderViewIds, rows, full, ROW_HEADER)
@@ -1049,8 +1111,8 @@ class BlockerService : AccessibilityService() {
                 if (short.isNotEmpty()) {
                     for (id in rules.feedSubtitleViewIds) {
                         val hits = list.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id).filter { n ->
-                            val t = n.text?.toString() ?: n.contentDescription?.toString() ?: ""
-                            short.any { DetectionRules.labelMatches(t.trim(), it) }
+                            val t = (n.text ?: n.contentDescription)?.toString()?.trim() ?: ""
+                            short.any { t.equals(it, ignoreCase = true) }
                         }
                         markRows(hits, rows, full, ROW_AD)
                     }
@@ -1066,23 +1128,24 @@ class BlockerService : AccessibilityService() {
             rowFlags = rows.associateTo(HashMap()) { it.node to it.flags }
             rowFlagsMode = mode
             if (state.debugMode) Log.d(TAG, "Feed markers searched in ${SystemClock.uptimeMillis() - t0}ms")
-        } else {
-            for (row in rows) row.flags = rowFlags[row.node] ?: 0
         }
 
+        // The caught-up line, by list position. If its position now shows something else,
+        // the list changed under it.
+        rows.firstOrNull { it.flags and ROW_CAUGHT_UP != 0 && it.pos >= 0 }?.let { caughtUpPos = it.pos }
+        if (caughtUpPos >= 0 && rows.any { it.pos == caughtUpPos && it.flags and ROW_CAUGHT_UP == 0 }) caughtUpPos = -1
+
         // Rows above the first header belong to a post whose header is off screen: they
-        // keep what they were last pass, unless their own markers say more.
+        // keep what their positions were last pass, unless their own markers say more.
         val firstStart = rows.indexOfFirst { it.flags and ROW_STARTS != 0 }
         val orphanEnd = if (firstStart < 0) rows.size else firstStart
-        var groupReason = (0 until orphanEnd).firstNotNullOfOrNull { i ->
-            badRows[rows[i].node]?.takeIf { it != ROW_CAUGHT_UP }
-        } ?: 0
+        var groupReason = (0 until orphanEnd).firstNotNullOfOrNull { i -> badPositions[rows[i].pos] } ?: 0
         val reasons = IntArray(rows.size)
         var start = 0
         var caughtUp = false
         for (i in rows.indices) {
             val f = rows[i].flags
-            if (!caughtUp && f and ROW_CAUGHT_UP == 0 && badRows[rows[i].node] == ROW_CAUGHT_UP) {
+            if (!caughtUp && caughtUpPos >= 0 && rows[i].pos > caughtUpPos) {
                 // Below the "caught up" row, which has scrolled off the top.
                 reasons.fill(groupReason, start, i)
                 caughtUp = true
@@ -1111,7 +1174,7 @@ class BlockerService : AccessibilityService() {
         if (!caughtUp) reasons.fill(groupReason, start, rows.size)
 
         // Visible stretches of unwanted rows.
-        val nowBad = HashMap<AccessibilityNodeInfo, Int>()
+        val nowBad = HashMap<Int, Int>()
         val groups = ArrayList<Pair<Rect, Int>>()
         var i = 0
         while (i < rows.size) {
@@ -1124,28 +1187,38 @@ class BlockerService : AccessibilityService() {
             var j = i
             while (j < rows.size && reasons[j] != 0) {
                 rect.union(rows[j].rect)
-                nowBad[rows[j].node] = reasons[j]
+                if (rows[j].pos >= 0 && reasons[j] != ROW_CAUGHT_UP) nowBad[rows[j].pos] = reasons[j]
                 j++
             }
             if (rect.intersect(view)) groups.add(rect to reason)
             i = j
         }
-        badRows = nowBad
+        badPositions = nowBad
 
         if (state.debugMode && now - lastFeedLogAt > 1000) {
             lastFeedLogAt = now
             val summary = rows.indices.joinToString(" ") { rowCode(rows[it].flags) + if (reasons[it] != 0) "*" else "" }
-            Log.d(TAG, "Feed rows (H=header A=ad S=suggested F=follow C=caught-up, *=unwanted): $summary dir=$feedDirection")
+            Log.d(
+                TAG,
+                "Feed rows (H=header A=ad S=suggested F=follow C=caught-up, *=unwanted): $summary " +
+                    "dir=$feedDirection first=${rows.firstOrNull()?.pos} caughtUp=$caughtUpPos"
+            )
         }
 
-        val skipped = allowSkip && groups.isNotEmpty() && now >= skipUntil &&
-            skipsWithoutUser < MAX_SKIPS_WITHOUT_USER && skipPast(groups, view)
-        // Whatever is left at rest (a sliver at the edge) gets a plain patch until the feed
-        // moves again. While it moves, or while a skip is moving it, there are none.
+        if (now < skipUntil) return
+        val guardTripped = skipsWithoutUser >= MAX_SKIPS_WITHOUT_USER
+        // While the stories row is showing (a tall bar floats over the top of the list), the
+        // user is at the top of the feed: skipping would scroll the stories away.
+        val atTop = view.top - full.top > view.height() * STORIES_SHOWING_SHARE
+        val skipped = groups.isNotEmpty() && !guardTripped && !atTop && skipPast(groups, view)
+        // Whatever is left at rest (an ad beside a post being read, a sliver at the edge)
+        // gets a plain patch until the feed moves again.
         var shown = 0
-        if (allowSkip && !skipped && now >= skipUntil) {
+        if (!skipped) {
             for ((rect, _) in groups) {
                 if (shown >= MAX_FEED_COVERS) break
+                // Once skipping has given up, never blank most of the screen.
+                if (guardTripped && rect.height() >= view.height() * SKIP_FILL_SHARE) continue
                 covers.show(COVER_FEED + shown, rect, touchable = false)
                 shown++
             }
@@ -1156,16 +1229,20 @@ class BlockerService : AccessibilityService() {
 
     /** Scrolls the feed so the unwanted stretch the user is moving into leaves the screen. */
     private fun skipPast(groups: List<Pair<Rect, Int>>, view: Rect): Boolean {
-        val half = view.top + view.height() / 2
-        val minPx = (view.height() * SKIP_MIN_SHARE).toInt()
-        // A sliver at the far edge waits until the user scrolls it further in.
-        fun big(r: Rect, down: Boolean) = r.height() >= minPx || if (down) r.top < half else r.bottom > half
+        val h = view.height()
+        // Skipped once the user has scrolled into it (it reaches the near quarter of the
+        // feed) or it fills most of the feed. Anything else is next to a post the user may
+        // still be reading, so it's patched over instead of dragging that post away too.
+        fun reached(r: Rect, down: Boolean) = r.height() >= h * SKIP_FILL_SHARE ||
+            if (down) r.top < view.top + h * SKIP_EDGE_SHARE else r.bottom > view.bottom - h * SKIP_EDGE_SHARE
         // The end of the friends feed: push back up rather than into endless suggestions.
-        val wall = groups.firstOrNull { it.second == ROW_CAUGHT_UP && big(it.first, down = true) }
+        val wall = groups.firstOrNull {
+            it.second == ROW_CAUGHT_UP && (it.first.height() >= h * SKIP_MIN_SHARE || it.first.top < view.top + h / 2)
+        }
         val distance = when {
             wall != null -> -(view.bottom - wall.first.top)
-            feedDirection > 0 -> groups.firstOrNull { big(it.first, down = true) }?.let { it.first.bottom - view.top }
-            else -> groups.lastOrNull { big(it.first, down = false) }?.let { -(view.bottom - it.first.top) }
+            feedDirection > 0 -> groups.firstOrNull { reached(it.first, down = true) }?.let { it.first.bottom - view.top }
+            else -> groups.lastOrNull { reached(it.first, down = false) }?.let { -(view.bottom - it.first.top) }
         } ?: return false
         if (abs(distance) < MIN_SKIP_PX) return false
         if (!swipeFeed(view, distance)) return false
@@ -1176,14 +1253,24 @@ class BlockerService : AccessibilityService() {
 
     /**
      * Drags the feed by [distance] px (positive: content moves up), then holds still so it
-     * doesn't fling on. A skip longer than the screen finishes on the next pass.
+     * doesn't fling on. A skip longer than the screen finishes on the next pass. Downward
+     * drags start low in the feed; upward ones start well below its top, clear of the
+     * status bar and Instagram's top bar.
      */
     private fun swipeFeed(view: Rect, distance: Int): Boolean {
         val slop = ViewConfiguration.get(this).scaledTouchSlop
-        val travel = minOf(abs(distance) + slop, view.height() - 2 * SWIPE_EDGE_PX).toFloat()
-        if (travel <= slop) return false
         val x = view.exactCenterX()
-        val y0 = if (distance > 0) view.bottom - SWIPE_EDGE_PX.toFloat() else view.top + SWIPE_EDGE_PX.toFloat()
+        val y0: Float
+        val room: Float
+        if (distance > 0) {
+            y0 = view.bottom - SWIPE_EDGE_PX.toFloat()
+            room = y0 - (view.top + SWIPE_EDGE_PX)
+        } else {
+            y0 = view.top + maxOf(SWIPE_EDGE_PX.toFloat(), view.height() * SWIPE_UP_START_SHARE)
+            room = view.bottom - SWIPE_EDGE_PX - y0
+        }
+        val travel = minOf((abs(distance) + slop).toFloat(), room)
+        if (travel <= slop) return false
         val y1 = if (distance > 0) y0 - travel else y0 + travel
         val moveMs = maxOf(SKIP_MIN_MOVE_MS, (travel / SKIP_MOVE_PX_PER_MS).toLong())
         return try {
@@ -1192,7 +1279,9 @@ class BlockerService : AccessibilityService() {
                 override fun onCompleted(gestureDescription: GestureDescription) {
                     try {
                         val hold = move.continueStroke(Path().apply { moveTo(x, y1) }, 0, SKIP_HOLD_MS, false)
-                        dispatchGesture(GestureDescription.Builder().addStroke(hold).build(), null, null)
+                        if (!dispatchGesture(GestureDescription.Builder().addStroke(hold).build(), null, null)) {
+                            Log.w(TAG, "Skip swipe hold refused")
+                        }
                     } catch (e: RuntimeException) {
                         Log.w(TAG, "Skip swipe hold failed", e)
                     }

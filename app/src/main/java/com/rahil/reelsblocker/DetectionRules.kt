@@ -39,6 +39,9 @@ class DetectionRules(
     val caughtUpLabels: List<String>,
     /** An ad's call-to-action bar ("Learn more", "Shop now"). */
     val feedAdViewIds: List<String>,
+    /** The title of the Following / Favorites feeds, which open without the tab bar. */
+    val feedPageTitleViewIds: List<String>,
+    val feedPageTitles: List<String>,
     /** The line under the author's name in a post header, where ads say "Ad". */
     val feedSubtitleViewIds: List<String>,
     /** The Follow button in a post header: only accounts the user doesn't follow have one. */
@@ -57,6 +60,7 @@ class DetectionRules(
 
     private val noCoverFullPrefixes: List<String> = noCoverViewIdPrefixes.map { IG_ID_PREFIX + it }
     val exploreSearchIdSet: Set<String> = exploreSearchViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    val feedPageTitleIdSet: Set<String> = feedPageTitleViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     val feedTopIdSet: Set<String> = feedTopViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     val exploreTabGridIdSet: Set<String> = exploreTabGridViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     private val storyFullPrefixes: List<String> = storyViewIdPrefixes.map { IG_ID_PREFIX + it }
@@ -78,6 +82,8 @@ class DetectionRules(
         private const val MAX_LIST_ITEMS = 50
         private const val MAX_ITEM_LENGTH = 100
         const val IG_ID_PREFIX = "com.instagram.android:id/"
+        // Labels shorter than this ("Ad") must match exactly: "Ad Astra" or "ad.vibes" isn't an ad.
+        private const val MIN_PREFIX_LABEL = 3
         private val VIEW_ID_PATTERN = Regex("[A-Za-z0-9_]+")
 
         fun load(context: Context): DetectionRules {
@@ -155,10 +161,10 @@ class DetectionRules(
          * "Reels. New").
          */
         fun labelMatches(desc: String, candidate: String): Boolean =
-            desc.equals(candidate, ignoreCase = true) ||
+            desc.equals(candidate, ignoreCase = true) || candidate.length >= MIN_PREFIX_LABEL && (
                 desc.startsWith("$candidate,", ignoreCase = true) ||
                 desc.startsWith("$candidate ", ignoreCase = true) ||
-                desc.startsWith("$candidate.", ignoreCase = true)
+                desc.startsWith("$candidate.", ignoreCase = true))
 
         /** Uses the same prefix matching as detection, in both directions, so e.g. home "Search" can't slip past "Search and explore". */
         private fun tabListsOverlap(home: List<String>, reels: List<String>, explore: List<String>): Boolean =
@@ -207,6 +213,8 @@ class DetectionRules(
                 feedAdViewIds = list("feed", "adViewIds", true, fb.feedAdViewIds),
                 feedFollowViewIds = list("feed", "followViewIds", true, fb.feedFollowViewIds),
                 feedSubtitleViewIds = list("feed", "subtitleViewIds", true, fb.feedSubtitleViewIds),
+                feedPageTitleViewIds = list("feed", "pageTitleViewIds", true, fb.feedPageTitleViewIds),
+                feedPageTitles = list("feed", "pageTitles", false, fb.feedPageTitles),
                 feedTopViewIds = list("feed", "topBarViewIds", true, fb.feedTopViewIds),
                 exploreTabGridViewIds = list("explore", "tabGridViewIds", true, fb.exploreTabGridViewIds),
                 storyViewIdPrefixes = list("stories", "viewIdPrefixes", true, fb.storyViewIdPrefixes)
@@ -232,7 +240,9 @@ class DetectionRules(
             feedAdViewIds = listOf("cta_container"),
             feedFollowViewIds = listOf("inline_follow_button"),
             feedSubtitleViewIds = listOf("secondary_label"),
-            feedTopViewIds = listOf("action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container"),
+            feedPageTitleViewIds = listOf("action_bar_title"),
+            feedPageTitles = listOf("Following", "Favorites"),
+            feedTopViewIds = listOf("action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"),
             exploreTabGridViewIds = listOf("recycler_view"),
             storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer")
         )

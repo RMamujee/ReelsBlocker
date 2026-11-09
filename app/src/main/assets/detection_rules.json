@@ -38,7 +38,9 @@
     "adViewIds": ["cta_container"],
     "followViewIds": ["inline_follow_button"],
     "subtitleViewIds": ["secondary_label"],
-    "topBarViewIds": ["action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container"]
+    "pageTitleViewIds": ["action_bar_title"],
+    "pageTitles": ["Following", "Favorites"],
+    "topBarViewIds": ["action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"]
   },
   "stories": {
     "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer"]

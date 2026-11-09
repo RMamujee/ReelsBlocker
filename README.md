@@ -4,7 +4,7 @@ Personal Android app that strips Instagram down to your friends. It kicks you ou
 
 ## How it works
 
-An `AccessibilityService` (`BlockerService`) acts on Instagram's events only. It also receives other apps' events, but the only thing it does with them is notice that another app's window came to the front, and take its covers down at once; everything else from other apps is dropped on arrival. It checks that the window in front is Instagram before it reads anything or presses BACK. Any new code that reads `rootInActiveWindow` must keep that check. On each screen change it detects Reels/Explore two ways:
+An `AccessibilityService` (`BlockerService`) receives events from Instagram only (`android:packageNames`). While one of its covers is on screen, and only then, it widens that to all apps, so it notices the moment another app's window comes to the front and takes the covers down; everything else from other apps is dropped on arrival, and it goes back to Instagram-only as soon as no cover is showing. It checks that the window in front is Instagram before it reads anything or presses BACK. Any new code that reads `rootInActiveWindow` must keep that check. On each screen change it detects Reels/Explore two ways:
 
 1. **Selected bottom tab**: a selected node in the bottom tab bar whose content description matches "Reels" / "Search and explore". Escaped by clicking the Home tab inside that same tab bar (BACK from a tab can behave oddly).
 2. **View IDs**: Instagram's internal IDs for the clips viewer / explore grid (e.g. `clips_viewer_view_pager`), counted only when visible on screen. Escaped with a BACK press. Catches reels opened from the feed, DMs, or notifications.
@@ -13,14 +13,14 @@ After each block there's a 1.5s cooldown so one escape can't fire twice mid-anim
 
 ### Covers: the Reels icon and the Explore grid
 
-Two things on the tab screens are hidden behind opaque patches (accessibility overlays matched to Instagram's black/white background) instead of being kicked:
+Two things on the tab screens are hidden behind opaque patches (accessibility overlays matched to Instagram's background) instead of being kicked:
 
 - **The Reels tab icon** ("Hide the Reels tab icon"): its tab cell is covered and taps on it do nothing. The Reels tab is still blocked underneath if you ever reach it.
 - **The Explore grid** ("Hide the Explore grid"): on the Search tab, the grid of recommended posts is covered but the search bar (and the topic chips under it) isn't. Current builds give the grid the generic id `recycler_view`, so that id (`explore.tabGridViewIds`) only counts while the Explore tab is selected. Tap it and search for accounts as normal. The cover disappears the moment you tap the search bar (before Instagram even reports the field as focused) and stays off while it's focused or holds a query, so you can type straight away. Once the grid's view ID has been seen, the cover is only drawn where the grid actually is, so Instagram's separate search and results pages are never covered. Newer builds show a tappable "Search" (or "Ask Meta AI or Search") box instead of a text field; that counts as the search bar too, and the last known bottom edge of the bar is remembered so the cover never creeps up over it. Reels opened from search results are still blocked (except ones reached from DMs). If the grid's view ID isn't known, the cover spans from the search bar down to the tab bar. Only if no cover can be placed does it fall back to the old kick-to-Home.
 
 Covers only exist while the thing they hide is on screen. Instagram can leave the hidden tab bar in its screen data under a chat, story, call or reel viewer, so a cover is never drawn while one of those is showing. They're recognised by the DM ids, the reels viewer ids, and the `noCover.viewIdPrefixes` list in the rules file. The Reels icon cover also requires a visible tab bar in the bottom quarter of the screen.
 
-Overlays sit above every app, so the moment another app's window comes to the front (Home, recents, a notification you tapped) the covers come down; the keyboard opening isn't leaving. As a backstop, while a cover is showing the service also checks twice a second which app is in front, and treats a run of empty answers (Samsung reports none for a moment after leaving an app) as leaving too.
+Overlays sit above every app, so the moment another app's window comes to the front (Home, recents, the notification shade) the covers come down, and checks Instagram scheduled on its way out are cancelled so they can't bring them back over the launcher. The keyboard opening isn't leaving. A popup over Instagram (a notification, the volume panel) isn't leaving either, so the screen is looked at again 0.4s later and the covers come back if Instagram is still in front. As a backstop, while a cover is showing the service also checks twice a second which app is in front, and treats a run of empty answers (Samsung reports none for a moment after leaving an app) as leaving too.
 
 The tab bar's own layout isn't exposed to accessibility services, so where the tab bar starts is measured from the Home tab itself. Covers use Instagram's own background: `#0C1014` in dark mode, white in light. In chats, stories, calls and viewers there are no covers, so there's no check either. The DM-reel feature doesn't poll at all.
 
@@ -30,11 +30,13 @@ With **Home feed: friends only** and **Hide ads in the home feed** on (both defa
 
 Instagram splits one post across several list rows (header, media, ad bar, buttons, caption), so the service groups rows from one post header to the next:
 
-- **Ad**: "Sponsored" or "Ad" (the header subtitle, or the start of the media's description, `feed.sponsoredLabels`), or an ad's call-to-action bar (`cta_container`, `feed.adViewIds`).
+- **Ad**: "Sponsored" (the header subtitle, or the start of the media's description) or exactly "Ad" in the header subtitle (`feed.sponsoredLabels`, `feed.subtitleViewIds`), or an ad's call-to-action bar (`cta_container`, `feed.adViewIds`). Labels shorter than three letters only ever match exactly, so a friend's "Ad Astra" song or "ad.vibes" username isn't an ad.
 - **Suggested**: a Follow button in the header (`inline_follow_button`, `feed.followViewIds`; accounts you follow don't get one), or a "Suggested for you" section.
 - **"You're all caught up"**: everything below it is suggested, so instead of skipping through endless suggestions the feed is pushed back up to that line.
 
-When the feed comes to rest, an unwanted stretch that fills 30% of it, or reaches its middle, is dragged off screen in the direction you were scrolling (the swipe holds still at the end so the list doesn't fling on). A sliver at the edge, like the top of an ad peeking in at the bottom, gets a plain background-coloured patch until the feed moves again rather than pushing the post you're reading away. The top bar and stories row float over the top of the feed (`feed.topBarViewIds`), so nothing is ever placed over them. After eight skips in a row without you scrolling, it stops until you scroll again.
+When the feed comes to rest, the screen is checked again (so a skip never lands on a story, chat or menu opened just as the feed stopped) and an unwanted stretch you've scrolled into (it reaches the near quarter of the feed, or fills 60% of it) is dragged off screen in the direction you were scrolling. The swipe holds still at the end so the list doesn't fling on, and scrolling the other way during a skip cancels it. Anything else, like an ad below a post you're still reading or a sliver at the edge, gets a plain background-coloured patch until the feed moves again rather than pushing that post away. While the stories row is showing (the top of the feed), nothing is skipped, so the stories never scroll away; an ad right under them is patched instead. The top bar and stories row float over the top of the feed (`feed.topBarViewIds`), so nothing is ever placed over them. After eight skips in a row without you scrolling, it stops until you scroll again, and never blanks most of the screen.
+
+Instagram reuses its row views for other posts as the list scrolls, so markers are searched again after every scroll (results are reused only while nothing has moved, e.g. while a video plays). What's remembered between passes, the rest of an ad whose header has scrolled off and the "caught up" line, is keyed by list position, taken from the scroll events. The **Following** and **Favorites** feeds (which open without the tab bar) are filtered the same way, recognised by their title (`feed.pageTitles`).
 
 Instagram's **For you** home feed is mostly suggested posts, so expect several skips in a row there. Its **Following** feed (tap the Instagram logo → Following) has only accounts you follow, plus the odd ad, which is skipped the same way.
 
@@ -86,4 +88,4 @@ APK lands at `app\build\outputs\apk\debug\app-debug.apk`.
 
 ## Privacy
 
-Everything is on-device. The service reads the screen only when Instagram is in front; from other apps it only notices that their window came to the front. It has no network permission and no analytics, and nothing leaves the phone.
+Everything is on-device. The service reads the screen only when Instagram is in front, and hears other apps only while one of its covers is showing, and then only to notice their window coming to the front. It has no network permission and no analytics, and nothing leaves the phone.
