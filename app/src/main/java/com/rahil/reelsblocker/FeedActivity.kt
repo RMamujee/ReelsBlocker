@@ -171,6 +171,7 @@ class FeedActivity : AppCompatActivity() {
             .put("allowDmReels", state.allowDmReels)
             .put("hideExplore", state.blockExplore)
             .put("skipStoryAds", state.skipStoryAds)
+            .put("hideLikes", state.hideLikeCounts)
             .put("debug", state.debugMode)
         val script = assets.open(FILTER_ASSET).bufferedReader().use { it.readText() }
         return "(function () {\nvar __rbCfg = $config;\n$script\n})();"

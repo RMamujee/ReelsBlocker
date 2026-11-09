@@ -111,6 +111,12 @@
                     android:text="@string/skip_story_ads" />
 
                 <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/sw_hide_like_counts"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/hide_like_counts" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/sw_dm_reels"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

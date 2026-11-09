@@ -17,6 +17,7 @@
     <string name="hide_suggested">Home feed: friends only (hide suggested posts and accounts)</string>
     <string name="hide_feed_ads">Hide ads in the home feed</string>
     <string name="skip_story_ads">Skip ads between stories</string>
+    <string name="hide_like_counts">Hide like counts (Insta Clean)</string>
     <string name="allow_dm_reels">Allow reels friends send in DMs (only the one you tap; swiping on gets blocked)</string>
 
     <string name="pause_title">Take a break from blocking</string>

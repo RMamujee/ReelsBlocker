@@ -37,6 +37,12 @@
     css.push('html.rb-explore main a[href*="/p/"], html.rb-explore main a[href*="/reel/"] { display: none !important; }');
     css.push('html.rb-explore main [role="progressbar"] { display: none !important; }');
   }
+  if (cfg.hideLikes) {
+    // A post's action row (the section with the Like button) puts its counts in number-only
+    // buttons next to the icons; "Liked by … and N others" is a section of its own.
+    css.push('section:has(svg[aria-label="Like"]) span[role="button"]:not(:has(svg)) { display: none !important; }');
+    css.push('section:has(a[href$="/liked_by/"]):not(:has(svg[aria-label="Like"])) { display: none !important; }');
+  }
   function addStyle() {
     var style = document.createElement('style');
     style.id = 'rb-style';
@@ -89,9 +95,12 @@
   }
   function postReason(article) {
     var head = leaves(article, 14);
+    // A Follow button only means "suggested" in the home feed; a post the user opened
+    // (from a link, a chat or a profile) shows whatever account posted it.
+    var onFeed = location.pathname === '/';
     for (var i = 0; i < head.length; i++) {
       if (cfg.hideAds && AD_LABELS.test(head[i])) return 'ad';
-      if (cfg.hideSuggested && (SUGGESTED_LABELS.test(head[i]) || FOLLOW_LABELS.test(head[i]))) return 'suggested';
+      if (cfg.hideSuggested && onFeed && (SUGGESTED_LABELS.test(head[i]) || FOLLOW_LABELS.test(head[i]))) return 'suggested';
     }
     return null;
   }

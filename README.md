@@ -66,11 +66,20 @@ If DM reels still get blocked, the chat screen's IDs have changed. With Debug mo
 - **Explore**: the grid tiles (links to posts and reels) are removed; the search box and its results (links to profiles, tags, places) stay.
 - **Story ads**: a story whose header says "Ad" makes the page fully transparent (so you see black) and every card of the ad is tapped past straight away, the way the right side of a story is tapped to advance.
 - **"Use the app" prompts**: dialogs and banners pushing the app are removed, and the page scroll they lock is unlocked.
+- **Like counts** (switch on the main screen, on by default): the numbers next to the Like, Comment and Share buttons and the "Liked by … and N others" line are hidden. The buttons still work.
 - The page is kept clear of the status bar, navigation bar and keyboard, and Instagram's bottom bar hides while you type.
 
 Only Instagram and Meta's login pages load inside; every other link (including Instagram's `l.instagram.com` redirects) opens in your browser. Camera and microphone requests are refused; picking photos to post works. It's the website, so there are no push notifications, and some app-only features (e.g. posting reels or stories with effects) aren't there.
 
 If Instagram changes its page and something slips through: debug builds allow Chrome DevTools to attach (`chrome://inspect`, or `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`), and with Debug mode on the filter logs `[rb]` lines to the console. Labels live at the top of `web_filter.js`.
+
+## Planned
+
+- Real app: skip feed ads with accessibility scroll actions instead of injected swipes, so a skip can never land as a tap (scripted testing once opened a profile and an ad's link).
+- Insta Clean: open to the Following feed (only accounts you follow, newest first).
+- Insta Clean: leave the story viewer after the last story instead of pausing on it.
+- Open instagram.com links from other apps in Insta Clean.
+- A daily time limit for Insta Clean.
 
 ## When Instagram updates break detection
 
