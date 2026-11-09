@@ -37,8 +37,16 @@ class DetectionRules(
     val followLabels: List<String>,
     /** "You're all caught up": everything after it is suggested. Matched anywhere in the text. */
     val caughtUpLabels: List<String>,
-    /** An ad's call-to-action bar, to recognise an ad whose header scrolled off the top. */
-    val adCtaLabels: List<String>,
+    /** An ad's call-to-action bar ("Learn more", "Shop now"). */
+    val feedAdViewIds: List<String>,
+    /** The line under the author's name in a post header, where ads say "Ad". */
+    val feedSubtitleViewIds: List<String>,
+    /** The Follow button in a post header: only accounts the user doesn't follow have one. */
+    val feedFollowViewIds: List<String>,
+    /** The top bar and stories row, which float over the top of the feed list. */
+    val feedTopViewIds: List<String>,
+    /** The grid under the Explore tab. Generic ids, so only used while that tab is selected. */
+    val exploreTabGridViewIds: List<String>,
     val storyViewIdPrefixes: List<String>
 ) {
     /** Fully-qualified resource ids for O(1) membership checks during the tree walk. */
@@ -49,6 +57,8 @@ class DetectionRules(
 
     private val noCoverFullPrefixes: List<String> = noCoverViewIdPrefixes.map { IG_ID_PREFIX + it }
     val exploreSearchIdSet: Set<String> = exploreSearchViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    val feedTopIdSet: Set<String> = feedTopViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    val exploreTabGridIdSet: Set<String> = exploreTabGridViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     private val storyFullPrefixes: List<String> = storyViewIdPrefixes.map { IG_ID_PREFIX + it }
 
     fun isDmViewId(viewId: String): Boolean =
@@ -194,7 +204,11 @@ class DetectionRules(
                 suggestedLabels = list("feed", "suggestedLabels", false, fb.suggestedLabels),
                 followLabels = list("feed", "followLabels", false, fb.followLabels),
                 caughtUpLabels = list("feed", "caughtUpLabels", false, fb.caughtUpLabels),
-                adCtaLabels = list("feed", "adCtaLabels", false, fb.adCtaLabels),
+                feedAdViewIds = list("feed", "adViewIds", true, fb.feedAdViewIds),
+                feedFollowViewIds = list("feed", "followViewIds", true, fb.feedFollowViewIds),
+                feedSubtitleViewIds = list("feed", "subtitleViewIds", true, fb.feedSubtitleViewIds),
+                feedTopViewIds = list("feed", "topBarViewIds", true, fb.feedTopViewIds),
+                exploreTabGridViewIds = list("explore", "tabGridViewIds", true, fb.exploreTabGridViewIds),
                 storyViewIdPrefixes = list("stories", "viewIdPrefixes", true, fb.storyViewIdPrefixes)
             )
         }
@@ -211,11 +225,15 @@ class DetectionRules(
             exploreSearchViewIds = listOf("action_bar_search_edit_text", "action_bar_search_hints_text_layout", "search_edit_text"),
             feedHeaderViewIds = listOf("row_feed_profile_header", "row_feed_photo_profile_header"),
             feedHeaderDescs = listOf("More options", "More actions"),
-            sponsoredLabels = listOf("Sponsored"),
+            sponsoredLabels = listOf("Sponsored", "Ad"),
             suggestedLabels = listOf("Suggested"),
             followLabels = listOf("Follow"),
             caughtUpLabels = listOf("all caught up", "completely caught up"),
-            adCtaLabels = listOf("Learn more", "Shop now", "Install now", "Sign up", "Book now", "Download"),
+            feedAdViewIds = listOf("cta_container"),
+            feedFollowViewIds = listOf("inline_follow_button"),
+            feedSubtitleViewIds = listOf("secondary_label"),
+            feedTopViewIds = listOf("action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container"),
+            exploreTabGridViewIds = listOf("recycler_view"),
             storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer")
         )
     }

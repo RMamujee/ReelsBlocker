@@ -6,6 +6,5 @@
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:notificationTimeout="80"
-    android:packageNames="com.instagram.android"
     android:description="@string/service_description"
     android:settingsActivity="com.rahil.reelsblocker.MainActivity" />

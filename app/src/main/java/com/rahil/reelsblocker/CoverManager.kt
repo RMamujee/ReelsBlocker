@@ -96,11 +96,11 @@ class CoverManager(private val service: AccessibilityService) {
         }
     }
 
-    /** Instagram follows the system theme by default: pure black in dark mode, white in light. */
+    /** Instagram follows the system theme by default: #0C1014 in dark mode (sampled on device), white in light. */
     private fun buildView(label: String?, touchable: Boolean): View {
         val night = (service.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
-        val bg = if (night) Color.BLACK else Color.WHITE
+        val bg = if (night) 0xFF0C1014.toInt() else Color.WHITE
         val view = if (label == null) {
             View(service)
         } else {
