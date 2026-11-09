@@ -72,12 +72,16 @@ class FeedActivity : AppCompatActivity() {
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
             mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            // The page never needs the app's or the phone's files.
+            allowFileAccess = false
+            allowContentAccess = false
             // Instagram serves a cut-down page to embedded browsers; present as Chrome.
             userAgentString = userAgentString.replace("; wv", "").replace(Regex(" Version/[0-9.]+"), "")
         }
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
-            setAcceptThirdPartyCookies(web, true)
+            // Instagram's login cookies are first-party; nothing else gets to set any.
+            setAcceptThirdPartyCookies(web, false)
         }
 
         installFilter()
@@ -86,15 +90,17 @@ class FeedActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val url = request.url
                 if (isInstagram(url)) return false
-                openExternally(url)
+                // Embedded frames and script-started jumps never leave the app: only a link the
+                // user tapped in the page itself opens outside.
+                if (request.isForMainFrame && request.hasGesture()) openExternally(url)
                 return true
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                // Without document-start scripts the filter goes in as soon as each page loads.
-                if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                    view.evaluateJavascript(filterScript(), null)
-                }
+                // Without document-start scripts the filter goes in as soon as each page loads,
+                // on Instagram's own pages only, like the document-start path.
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+                if (Uri.parse(url).host in FILTER_HOSTS) view.evaluateJavascript(filterScript(), null)
             }
         }
         web.webChromeClient = object : WebChromeClient() {
@@ -146,13 +152,16 @@ class FeedActivity : AppCompatActivity() {
     /** The filter runs at document start on Instagram's pages only, before any of its scripts. */
     private fun installFilter() {
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-            WebViewCompat.addDocumentStartJavaScript(web, filterScript(), setOf("https://www.instagram.com", "https://instagram.com"))
+            WebViewCompat.addDocumentStartJavaScript(web, filterScript(), FILTER_HOSTS.map { "https://$it" }.toSet())
         } else {
             Log.w(TAG, "WebView without document-start scripts: filter applied after page load")
         }
     }
 
-    /** The filter with the user's switches from the main screen. */
+    /**
+     * The filter with the user's switches from the main screen, passed in as a closure
+     * variable so Instagram's own scripts can't read them.
+     */
     private fun filterScript(): String {
         val state = BlockerState(this)
         val config = JSONObject()
@@ -164,7 +173,7 @@ class FeedActivity : AppCompatActivity() {
             .put("skipStoryAds", state.skipStoryAds)
             .put("debug", state.debugMode)
         val script = assets.open(FILTER_ASSET).bufferedReader().use { it.readText() }
-        return "window.__rbConfig = $config;\n$script"
+        return "(function () {\nvar __rbCfg = $config;\n$script\n})();"
     }
 
     private fun isInstagram(url: Uri): Boolean {
@@ -175,13 +184,23 @@ class FeedActivity : AppCompatActivity() {
         return ALLOWED_HOSTS.any { host == it || host.endsWith(".$it") }
     }
 
+    /**
+     * Opens a web link in the browser. Instagram wraps outside links in a redirect, so the
+     * real target is unwrapped, and then checked again: only http(s) links ever leave the
+     * app, as a browsable link, so a crafted link can't launch some other app's screen.
+     */
     private fun openExternally(url: Uri) {
-        // Instagram wraps outside links in a redirect; open the real target.
         val target = if (url.host == "l.instagram.com") url.getQueryParameter("u")?.let(Uri::parse) ?: url else url
+        val scheme = target.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") {
+            Log.w(TAG, "Refused to open a non-web link")
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW, target).addCategory(Intent.CATEGORY_BROWSABLE)
         try {
-            startActivity(Intent(Intent.ACTION_VIEW, target))
+            startActivity(intent)
         } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "No app to open $target")
+            Log.w(TAG, "No browser to open a link")
         }
     }
 
@@ -189,7 +208,9 @@ class FeedActivity : AppCompatActivity() {
         private const val TAG = "ReelsBlocker"
         private const val HOME = "https://www.instagram.com/"
         private const val FILTER_ASSET = "web_filter.js"
-        // Instagram's site, its image/video CDN, and Meta's login and account pages.
-        private val ALLOWED_HOSTS = listOf("instagram.com", "cdninstagram.com", "facebook.com", "accountscenter.meta.com", "meta.com")
+        // Pages that may load in the app: Instagram's site and Meta's login and account pages.
+        // (Images and videos come from Instagram's CDN as subresources, which don't need this.)
+        private val ALLOWED_HOSTS = listOf("instagram.com", "facebook.com", "accountscenter.meta.com")
+        private val FILTER_HOSTS = setOf("www.instagram.com", "instagram.com")
     }
 }

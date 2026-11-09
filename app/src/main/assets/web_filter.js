@@ -2,13 +2,14 @@
 // Like a browser ad blocker it changes the page itself: unwanted things are removed as they
 // are added, before they are drawn, so nothing is covered or scrolled past.
 //
-// window.__rbConfig is set by FeedActivity from the switches on the main screen.
+// __rbCfg is a closure variable FeedActivity wraps around this script, from the switches on
+// the main screen; Instagram's own scripts can't see it.
 (function () {
   'use strict';
   if (window.__rbFilter) return;
   window.__rbFilter = true;
 
-  var cfg = window.__rbConfig || {};
+  var cfg = (typeof __rbCfg !== 'undefined' && __rbCfg) || {};
   var log = cfg.debug ? function () { console.log.apply(console, ['[rb]'].concat([].slice.call(arguments))); } : function () {};
 
   var AD_LABELS = /^(sponsored|ad|paid partnership)$/i;
@@ -162,15 +163,20 @@
   }
 
   // ---- Stories: an ad story is hidden and passed straight away ---------------------------
-  // The website marks a story ad with "Ad" next to the account name at the top. While one
-  // shows, the page is made fully transparent (the viewer behind is black) and every card of
-  // the ad is tapped past at once, the way the right side of a story is tapped to advance.
+  // The website marks a story ad with "Ad" (or "Sponsored") right after the account name at
+  // the top. While one shows, the page is made fully transparent (the viewer behind is black)
+  // and the ad's cards are tapped past, the way the right side of a story is tapped to
+  // advance. The taps are bounded, and never land on a link or button (an ad's "Learn more"
+  // or a link sticker); if no safe spot is found the ad is shown and left to the user.
+  var STORY_AD_LABEL = /^(sponsored|ad)$/i;
+  var MAX_STORY_TAPS = 4;
+  var storyTaps = 0;
   var lastStoryTap = 0;
   function storyHeader() {
     var out = [];
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     var n;
-    while ((n = walker.nextNode()) && out.length < 12) {
+    while ((n = walker.nextNode()) && out.length < 4) {
       var t = n.nodeValue.trim();
       if (!t || !n.parentElement) continue;
       var r = n.parentElement.getBoundingClientRect();
@@ -178,32 +184,60 @@
     }
     return out;
   }
+  function isStoryAd() {
+    // [account name, label, ...]: the label is one of the first header texts.
+    var head = storyHeader();
+    return head.length >= 2 && (STORY_AD_LABEL.test(head[1]) || STORY_AD_LABEL.test(head[2] || ''));
+  }
+  function safeTapTarget() {
+    var points = [[0.85, 0.5], [0.92, 0.4], [0.92, 0.6], [0.8, 0.35]];
+    for (var i = 0; i < points.length; i++) {
+      var x = innerWidth * points[i][0], y = innerHeight * points[i][1];
+      var el = document.elementFromPoint(x, y);
+      if (el && !el.closest('a, button, input, textarea, [role="link"], [role="button"][aria-label]')) return { el: el, x: x, y: y };
+    }
+    return null;
+  }
   function tapNextStory() {
-    var x = innerWidth * 0.85, y = innerHeight * 0.5;
-    var el = document.elementFromPoint(x, y);
-    if (!el) return;
-    var o = { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, isPrimary: true, pointerType: 'touch' };
-    el.dispatchEvent(new PointerEvent('pointerdown', o));
-    el.dispatchEvent(new MouseEvent('mousedown', o));
-    el.dispatchEvent(new PointerEvent('pointerup', o));
-    el.dispatchEvent(new MouseEvent('mouseup', o));
-    el.dispatchEvent(new MouseEvent('click', o));
+    var t = safeTapTarget();
+    if (!t) return false;
+    var o = { bubbles: true, cancelable: true, clientX: t.x, clientY: t.y, pointerId: 1, isPrimary: true, pointerType: 'touch' };
+    t.el.dispatchEvent(new PointerEvent('pointerdown', o));
+    t.el.dispatchEvent(new MouseEvent('mousedown', o));
+    t.el.dispatchEvent(new PointerEvent('pointerup', o));
+    t.el.dispatchEvent(new MouseEvent('mouseup', o));
+    t.el.dispatchEvent(new MouseEvent('click', o));
+    return true;
   }
   function checkStory() {
     var root = document.documentElement;
     if (!document.body) return;
     if (!cfg.skipStoryAds || !root.classList.contains('rb-stories')) {
       root.classList.remove('rb-story-ad');
+      storyTaps = 0;
       return;
     }
-    var isAd = storyHeader().some(function (t) { return AD_LABELS.test(t); });
-    root.classList.toggle('rb-story-ad', isAd);
-    if (!isAd) return;
+    if (!isStoryAd()) {
+      root.classList.remove('rb-story-ad');
+      storyTaps = 0;
+      return;
+    }
+    if (storyTaps >= MAX_STORY_TAPS) {
+      // Couldn't get past it: show it rather than leave the user on a black screen.
+      root.classList.remove('rb-story-ad');
+      return;
+    }
+    root.classList.add('rb-story-ad');
     var now = Date.now();
     if (now - lastStoryTap < 150) return;
     lastStoryTap = now;
+    storyTaps++;
+    if (!tapNextStory()) {
+      storyTaps = MAX_STORY_TAPS;
+      root.classList.remove('rb-story-ad');
+      return;
+    }
     log('skipping story ad');
-    tapNextStory();
     // A static ad card may not change the page again until it's passed: look once more.
     setTimeout(checkStory, 200);
   }
