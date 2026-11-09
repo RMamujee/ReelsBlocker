@@ -23,6 +23,8 @@ class DetectionRules(
     /** Ids that only exist on a DM chat screen, used to allow reels opened from a chat. */
     val dmViewIds: List<String>,
     val dmViewIdPrefixes: List<String>,
+    /** The DM inbox list: a chat tapped there slides over the tab bar. */
+    val dmInboxViewIds: List<String>,
     /** Full-screen surfaces (stories, calls, viewers) that may leave a hidden tab bar in the tree; no covers while one is showing. */
     val noCoverViewIdPrefixes: List<String>,
     /** The Explore search bar, which must never be covered. */
@@ -60,6 +62,7 @@ class DetectionRules(
     val reelsIdSet: Set<String> = reelsViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     val exploreIdSet: Set<String> = exploreViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     private val dmIdSet: Set<String> = dmViewIds.map { IG_ID_PREFIX + it }.toHashSet()
+    val dmInboxIdSet: Set<String> = dmInboxViewIds.map { IG_ID_PREFIX + it }.toHashSet()
     private val dmFullPrefixes: List<String> = dmViewIdPrefixes.map { IG_ID_PREFIX + it }
 
     private val noCoverFullPrefixes: List<String> = noCoverViewIdPrefixes.map { IG_ID_PREFIX + it }
@@ -206,6 +209,7 @@ class DetectionRules(
                 homeTabDescs = homeTabs,
                 dmViewIds = list("dm", "viewIds", true, fb.dmViewIds),
                 dmViewIdPrefixes = list("dm", "viewIdPrefixes", true, fb.dmViewIdPrefixes),
+                dmInboxViewIds = list("dm", "inboxViewIds", true, fb.dmInboxViewIds),
                 noCoverViewIdPrefixes = list("noCover", "viewIdPrefixes", true, fb.noCoverViewIdPrefixes),
                 exploreSearchViewIds = list("explore", "searchViewIds", true, fb.exploreSearchViewIds),
                 feedHeaderViewIds = list("feed", "postHeaderViewIds", true, fb.feedHeaderViewIds),
@@ -235,7 +239,8 @@ class DetectionRules(
             homeTabDescs = listOf("Home"),
             dmViewIds = listOf("row_thread_composer_edittext", "row_thread_composer_container", "direct_thread_fragment_container"),
             dmViewIdPrefixes = listOf("row_thread_composer", "direct_thread"),
-            noCoverViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer"),
+            dmInboxViewIds = listOf("inbox_refreshable_thread_list_recyclerview"),
+            noCoverViewIdPrefixes = listOf("reel_viewer_root", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer"),
             exploreSearchViewIds = listOf("action_bar_search_edit_text", "action_bar_search_hints_text_layout", "search_edit_text"),
             feedHeaderViewIds = listOf("row_feed_profile_header", "row_feed_photo_profile_header"),
             feedHeaderDescs = listOf("More options", "More actions"),
@@ -250,7 +255,7 @@ class DetectionRules(
             feedPageTitles = listOf("Following", "Favorites"),
             feedTopViewIds = listOf("action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"),
             exploreTabGridViewIds = listOf("recycler_view"),
-            storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer"),
+            storyViewIdPrefixes = listOf("reel_viewer_root", "story_viewer", "stories_viewer"),
             storyAdViewIds = listOf("reel_item_sponsored_label_footer_pill", "sponsored_message_composer_container"),
             storyAdPhrases = listOf("sponsored story")
         )

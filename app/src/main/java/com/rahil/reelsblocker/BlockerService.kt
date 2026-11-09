@@ -50,7 +50,13 @@ class BlockerService : AccessibilityService() {
         /** Bottom of the top bar and stories row, which float over the top of the feed. */
         val feedTop: Int = -1,
         /** The largest visible story-viewer view, so ad checks never see the feed left under it. */
-        val storyViewer: AccessibilityNodeInfo? = null
+        val storyViewer: AccessibilityNodeInfo? = null,
+        /** The DM inbox list is on screen. */
+        val sawInbox: Boolean = false,
+        /** Debug: what made coverBlocked true. */
+        val blockedBy: String? = null,
+        /** The view that made coverBlocked true, watched so the covers return the moment it goes. */
+        val blockingNode: AccessibilityNodeInfo? = null
     )
 
     /** One child of the home feed list. Instagram splits a post across several rows. */
@@ -139,8 +145,42 @@ class BlockerService : AccessibilityService() {
     }
     private var watchingAllApps = false
 
+    // Story ads: the viewer from the last scan, so every story change can be checked at
+    // once instead of waiting for the throttled pass.
     private var lastStorySkipAt = 0L
+    private var lastStoryViewer: AccessibilityNodeInfo? = null
+    private var lastStoryCheckAt = 0L
     private val hideStoryCover = Runnable { covers.hide(COVER_STORY_AD) }
+
+    // Where the Explore cover last went, so a tap on the Explore tab can put it straight
+    // back before Instagram has drawn the grid; and whether the DM inbox was on screen, so
+    // tapping a chat takes the Reels icon cover down before the chat slides over it.
+    private var lastExploreRect: Rect? = null
+    private var lastScanInbox = false
+
+    // A chat, story or viewer closing sends its last events while it's still on screen, so
+    // a pass that saw one keeps looking (for a short while after the last event) and the
+    // covers come straight back once it's gone.
+    private var blockedFollowUntil = 0L
+    // Closing a chat often sends no events at all once its slide-out starts, so the view
+    // that held the covers off is watched directly: one cheap refresh every
+    // BLOCKER_WATCH_MS, and a full pass the moment it's gone.
+    private var blockerNode: AccessibilityNodeInfo? = null
+    private val blockerWatch = object : Runnable {
+        override fun run() {
+            val node = blockerNode ?: return
+            if (!node.refresh() || !node.isVisibleToUser) {
+                blockerNode = null
+                runDetection(deepSearch = false)
+                return
+            }
+            handler.postDelayed(this, BLOCKER_WATCH_MS)
+        }
+    }
+    private val blockedRecheck = Runnable { runDetection(deepSearch = false) }
+    // An Explore tab tap puts the cover up before Instagram has switched screens; passes in
+    // that gap still see Home and mustn't take it down.
+    private var exploreTapUntil = 0L
 
     // Reels tab cell bounds, keyed by the label node's bounds, so the tab-bar IPC check
     // only reruns when the tab moves.
@@ -197,7 +237,7 @@ class BlockerService : AccessibilityService() {
         // escape never fires twice and pops an extra screen (or exits the app).
         private const val ACTION_COOLDOWN_MS = 1500L
         private const val DETECT_THROTTLE_MS = 250L
-        private const val TRAILING_CHECK_MS = 350L
+        private const val TRAILING_CHECK_MS = 150L
         private const val RETRY_MS = 150L
         private const val MAX_RETRIES = 5
         private const val DM_CONTEXT_GRACE_MS = 1200L
@@ -251,8 +291,14 @@ class BlockerService : AccessibilityService() {
         private const val ROW_STARTS = ROW_HEADER or ROW_SUGGESTED or ROW_CAUGHT_UP
         // A skip swipe plus Instagram's page animation; the next story is checked after.
         private const val STORY_SWIPE_MS = 120L
-        private const val STORY_SKIP_COOLDOWN_MS = 900L
-        private const val STORY_COVER_MS = 800L
+        private const val STORY_SKIP_COOLDOWN_MS = 500L
+        // The black cover comes off as soon as the next story shows; this is only a backstop.
+        private const val STORY_COVER_MAX_MS = 1500L
+        private const val STORY_CHECK_MS = 60L
+        private const val BLOCKED_FOLLOW_UP_MS = 200L
+        private const val BLOCKED_FOLLOW_WINDOW_MS = 1500L
+        private const val BLOCKER_WATCH_MS = 150L
+        private const val EXPLORE_TAP_HOLD_MS = 700L
         // Whole word, so a grid post described as "research…" isn't taken for the search bar.
         private val SEARCH_WORD = Regex("\\bsearch\\b", RegexOption.IGNORE_CASE)
 
@@ -329,17 +375,22 @@ class BlockerService : AccessibilityService() {
             event.eventType == AccessibilityEvent.TYPE_VIEW_FOCUSED
         ) {
             onPossibleSearchTap(event)
+            if (event.eventType == AccessibilityEvent.TYPE_VIEW_CLICKED) onTap(event)
         }
 
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        val stateChange = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        if (stateChange) {
             pendingDeep = true
             failedAttempts = 0
         }
+        blockedFollowUntil = SystemClock.uptimeMillis() + BLOCKED_FOLLOW_WINDOW_MS
+        checkStoryNow()
 
         handler.removeCallbacks(trailingCheck)
         handler.postDelayed(trailingCheck, TRAILING_CHECK_MS)
 
-        if (SystemClock.uptimeMillis() - lastDetectAt < DETECT_THROTTLE_MS) return
+        // A new screen is acted on at once; the throttle is for the stream of content changes.
+        if (!stateChange && SystemClock.uptimeMillis() - lastDetectAt < DETECT_THROTTLE_MS) return
 
         runDetection(deepSearch = pendingDeep)
     }
@@ -362,6 +413,8 @@ class BlockerService : AccessibilityService() {
         handler.removeCallbacks(recheck)
         handler.removeCallbacks(searchGraceEnd)
         handler.removeCallbacks(confirmLeft)
+        handler.removeCallbacks(blockerWatch)
+        blockerNode = null
         handler.postDelayed(confirmLeft, CONFIRM_LEFT_MS)
     }
 
@@ -428,6 +481,9 @@ class BlockerService : AccessibilityService() {
 
         val scan = scan(root, wantReels, wantExplore, hideIcon, wantFeed, wantStoryAds, deepSearch)
         exploreOnScreen = scan.exploreVisible
+        lastScanInbox = scan.sawInbox
+        lastStoryViewer = if (wantStoryAds) scan.storyViewer else null
+        if (scan.storyViewer == null && covers.has(COVER_STORY_AD)) covers.hide(COVER_STORY_AD)
         // Before the Reels check: an ad's video player mustn't get the whole viewer backed out of.
         val story = scan.storyViewer
         if (wantStoryAds && story != null && handleStoryAd(story)) {
@@ -501,7 +557,17 @@ class BlockerService : AccessibilityService() {
             covers.hide(COVER_EXPLORE)
             covers.hide(COVER_REELS_TAB)
             clearFeed()
-            if (state.debugMode && deepSearch) Log.d(TAG, "Covers: off (chat/story/call/viewer on screen)")
+            if (SystemClock.uptimeMillis() < blockedFollowUntil) {
+                handler.removeCallbacks(blockedRecheck)
+                handler.postDelayed(blockedRecheck, BLOCKED_FOLLOW_UP_MS)
+            }
+            val blocker = scan.blockingNode
+            if (blocker != null) {
+                blockerNode = blocker
+                handler.removeCallbacks(blockerWatch)
+                handler.postDelayed(blockerWatch, BLOCKER_WATCH_MS)
+            }
+            if (state.debugMode) Log.d(TAG, "Covers: off (blocked by ${scan.blockedBy})")
             return false
         }
         val searching = scan.searchActive || SystemClock.uptimeMillis() < searchGraceUntil
@@ -534,8 +600,9 @@ class BlockerService : AccessibilityService() {
             }
         }
         if (exploreRect != null) {
+            lastExploreRect = Rect(exploreRect)
             covers.show(COVER_EXPLORE, exploreRect, getString(R.string.explore_cover))
-        } else if (!keepExplore) {
+        } else if (!keepExplore && SystemClock.uptimeMillis() >= exploreTapUntil) {
             covers.hide(COVER_EXPLORE)
         }
 
@@ -552,7 +619,7 @@ class BlockerService : AccessibilityService() {
             clearFeed()
         }
 
-        if (state.debugMode && deepSearch) {
+        if (state.debugMode) {
             Log.d(
                 TAG,
                 "Covers: explore=$exploreRect (grid=${scan.exploreGridRect}, search=$searching, kept=$keepExplore) " +
@@ -687,6 +754,9 @@ class BlockerService : AccessibilityService() {
         var feedArea = 1L
         var feedTop = -1
         var feedPage = false
+        var blockedBy: String? = null
+        var blockingNode: AccessibilityNodeInfo? = null
+        var sawInbox = false
         var storyViewer: AccessibilityNodeInfo? = null
         var storyArea = 0L
         val bounds = Rect()
@@ -713,6 +783,7 @@ class BlockerService : AccessibilityService() {
                     if (tabGrid == null || area(bounds) > area(tabGrid)) tabGrid = Rect(bounds)
                 }
                 if (checkDm && !sawDm) sawDm = rules.isDmViewId(viewId)
+                if (!sawInbox && viewId in rules.dmInboxIdSet) sawInbox = true
                 if (wantStoryAds && rules.isStoryViewId(viewId)) {
                     node.getBoundsInScreen(bounds)
                     val a = area(bounds)
@@ -724,6 +795,10 @@ class BlockerService : AccessibilityService() {
                 if (wantCovers && !coverBlocked) {
                     coverBlocked = viewId in rules.reelsIdSet || rules.isDmViewId(viewId) ||
                         rules.isNoCoverViewId(viewId)
+                    if (coverBlocked) {
+                        blockedBy = viewId.removePrefix(DetectionRules.IG_ID_PREFIX)
+                        blockingNode = node
+                    }
                 }
             }
 
@@ -738,7 +813,9 @@ class BlockerService : AccessibilityService() {
                 } else {
                     // A typing box lower down (comments, chat, story reply) sits where the
                     // tab bar was, so never cover it, whatever screen it's on.
+                    if (!coverBlocked) blockingNode = node
                     coverBlocked = true
+                    blockedBy = "typing box"
                 }
             } else if (wantExplore && visible && looksLikeSearch(node)) {
                 // Newer builds show a tappable "Search" box that only turns into a text
@@ -867,6 +944,9 @@ class BlockerService : AccessibilityService() {
             onHome = onHome || feedPage,
             feedList = if (onHome || feedPage) feedList else null,
             feedTop = feedTop,
+            sawInbox = sawInbox,
+            blockedBy = blockedBy,
+            blockingNode = blockingNode,
             storyViewer = storyViewer
         )
     }
@@ -1007,6 +1087,49 @@ class BlockerService : AccessibilityService() {
         handler.removeCallbacks(searchGraceEnd)
         handler.postDelayed(searchGraceEnd, SEARCH_GRACE_MS + 50)
         if (state.debugMode) Log.d(TAG, "Search bar tapped: Explore cover off")
+    }
+
+    /**
+     * Acts on a tap before Instagram has drawn the screen it leads to: the Explore tab puts
+     * the grid cover straight back where it last was, and a chat tapped in the DM inbox takes
+     * the Reels icon cover down, since the chat slides over the tab bar. The next pass
+     * corrects either if the tap went somewhere else.
+     */
+    private fun onTap(event: AccessibilityEvent) {
+        val source = event.source ?: return
+        val desc = source.contentDescription?.toString()
+        if (state.debugMode) Log.d(TAG, "Tap: class=${event.className} inbox=$lastScanInbox")
+        if (state.blockExplore && desc != null && rules.exploreTabDescs.any { DetectionRules.labelMatches(desc, it) }) {
+            val rect = lastExploreRect ?: return
+            exploreTapUntil = SystemClock.uptimeMillis() + EXPLORE_TAP_HOLD_MS
+            covers.show(COVER_EXPLORE, rect, getString(R.string.explore_cover))
+            ensureWatchdog()
+            // A static grid may send nothing more once it's up: check when the hold ends.
+            scheduleRecheck(EXPLORE_TAP_HOLD_MS + 50)
+            return
+        }
+        if (lastScanInbox && covers.has(COVER_REELS_TAB) && cachedTabBarTop > 0) {
+            val b = Rect().also { source.getBoundsInScreen(it) }
+            if (b.bottom <= cachedTabBarTop) covers.hide(COVER_REELS_TAB)
+        }
+    }
+
+    /**
+     * Checks the story on screen on every change, not just on the throttled pass, so an
+     * ad is hidden and skipped within a frame or two of appearing.
+     */
+    private fun checkStoryNow() {
+        val viewer = lastStoryViewer ?: return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastStoryCheckAt < STORY_CHECK_MS) return
+        lastStoryCheckAt = now
+        val root = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) getRootInActiveWindow(0) else rootInActiveWindow
+        if (root?.packageName?.toString() != IG || !viewer.refresh() || !viewer.isVisibleToUser) {
+            lastStoryViewer = null
+            covers.hide(COVER_STORY_AD)
+            return
+        }
+        handleStoryAd(viewer)
     }
 
     private fun onFeedScrolled(event: AccessibilityEvent) {
@@ -1344,13 +1467,13 @@ class BlockerService : AccessibilityService() {
     }
 
     /**
-     * A story ad is marked "Sponsored" under the account name at the top. Swipes on to the
-     * next account's stories, which skips every card of the ad, behind a brief cover.
+     * A story ad is blacked out the moment it appears and skipped with a swipe on to the
+     * next account's stories, which skips every card of the ad. The black comes off as soon
+     * as a story that isn't an ad shows.
      * Returns true while an ad is being skipped, so nothing else acts on that screen.
      */
     private fun handleStoryAd(viewer: AccessibilityNodeInfo): Boolean {
         val now = SystemClock.uptimeMillis()
-        if (now - lastStorySkipAt < STORY_SKIP_COOLDOWN_MS) return covers.has(COVER_STORY_AD)
         // Searched inside the viewer and its bounds only: the home feed stays in the tree
         // under it, and a "Sponsored" post there must not skip a friend's story.
         val screen = Rect().also { viewer.getBoundsInScreen(it) }
@@ -1375,7 +1498,19 @@ class BlockerService : AccessibilityService() {
                         .any { DetectionRules.labelMatches(it, label) }
             }
         }
-        if (!isAd) return false
+        if (!isAd) {
+            // The next story is showing: take the cover off at once.
+            if (covers.has(COVER_STORY_AD) && now - lastStorySkipAt > STORY_SWIPE_MS) covers.hide(COVER_STORY_AD)
+            return false
+        }
+        // Black straight away, so the ad itself is barely seen; the viewer is black between
+        // stories anyway. Touches pass through, so the cover can't catch the swipe.
+        covers.show(COVER_STORY_AD, screen, color = android.graphics.Color.BLACK, touchable = false)
+        ensureWatchdog()
+        handler.removeCallbacks(hideStoryCover)
+        handler.postDelayed(hideStoryCover, STORY_COVER_MAX_MS)
+        // Still on the ad from the last swipe (the page animation): wait for it.
+        if (now - lastStorySkipAt < STORY_SKIP_COOLDOWN_MS) return true
 
         // The viewer's own bounds, so in split screen the swipe and cover stay on Instagram.
         val y = screen.exactCenterY()
@@ -1391,11 +1526,6 @@ class BlockerService : AccessibilityService() {
             return false
         }
         lastStorySkipAt = now
-        // Touches pass through, so the cover can't catch the swipe it hides.
-        covers.show(COVER_STORY_AD, screen, getString(R.string.story_ad_cover), touchable = false)
-        ensureWatchdog()
-        handler.removeCallbacks(hideStoryCover)
-        handler.postDelayed(hideStoryCover, STORY_COVER_MS)
         // Back-to-back ads, or a swipe Instagram ignored: look again once it settles.
         scheduleRecheck(STORY_SKIP_COOLDOWN_MS + 50)
         Log.i(TAG, "Skipped a story ad")

@@ -19,7 +19,7 @@ import android.widget.TextView
  */
 class CoverManager(private val service: AccessibilityService) {
 
-    private class Cover(val view: View, val rect: Rect, val label: String?, val touchable: Boolean)
+    private class Cover(val view: View, val rect: Rect, val label: String?, val touchable: Boolean, val color: Int?)
 
     private val wm = service.getSystemService(AccessibilityService.WINDOW_SERVICE) as WindowManager
     private val covers = HashMap<String, Cover>()
@@ -32,28 +32,29 @@ class CoverManager(private val service: AccessibilityService) {
      * [touchable] covers swallow taps (the Reels icon, the Explore grid). Feed and story
      * covers pass touches through so the feed still scrolls and gestures still land.
      */
-    fun show(key: String, rect: Rect, label: String? = null, touchable: Boolean = true) {
+    /** [color] overrides the Instagram background colour (black over the story viewer). */
+    fun show(key: String, rect: Rect, label: String? = null, touchable: Boolean = true, color: Int? = null) {
         if (rect.width() <= 0 || rect.height() <= 0) {
             hide(key)
             return
         }
         val existing = covers[key]
-        if (existing != null && (existing.label != label || existing.touchable != touchable)) hide(key)
+        if (existing != null && (existing.label != label || existing.touchable != touchable || existing.color != color)) hide(key)
         val current = covers[key]
         if (current != null) {
             if (current.rect == rect) return
             try {
                 wm.updateViewLayout(current.view, params(rect, touchable))
-                covers[key] = Cover(current.view, Rect(rect), label, touchable)
+                covers[key] = Cover(current.view, Rect(rect), label, touchable, color)
             } catch (e: Exception) {
                 hide(key)
             }
             return
         }
-        val view = buildView(label, touchable)
+        val view = buildView(label, touchable, color)
         try {
             wm.addView(view, params(rect, touchable))
-            covers[key] = Cover(view, Rect(rect), label, touchable)
+            covers[key] = Cover(view, Rect(rect), label, touchable, color)
         } catch (e: Exception) {
             Log.e(TAG, "Cover failed", e)
         }
@@ -97,7 +98,7 @@ class CoverManager(private val service: AccessibilityService) {
     }
 
     /** Instagram follows the system theme by default: #0C1014 in dark mode (sampled on device), white in light. */
-    private fun buildView(label: String?, touchable: Boolean): View {
+    private fun buildView(label: String?, touchable: Boolean, color: Int?): View {
         val night = (service.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
         val bg = if (night) 0xFF0C1014.toInt() else Color.WHITE
@@ -111,7 +112,7 @@ class CoverManager(private val service: AccessibilityService) {
                 setTextColor(if (night) 0xFF8E8E8E.toInt() else 0xFF737373.toInt())
             }
         }
-        view.setBackgroundColor(bg)
+        view.setBackgroundColor(color ?: bg)
         view.isClickable = touchable
         return view
     }

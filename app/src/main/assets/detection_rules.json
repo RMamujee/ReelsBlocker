@@ -43,7 +43,7 @@
     "topBarViewIds": ["action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"]
   },
   "stories": {
-    "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer"],
+    "viewIdPrefixes": ["reel_viewer_root", "story_viewer", "stories_viewer"],
     "adViewIds": ["reel_item_sponsored_label_footer_pill", "sponsored_message_composer_container"],
     "adPhrases": ["sponsored story"]
   },
@@ -53,9 +53,10 @@
       "row_thread_composer_container",
       "direct_thread_fragment_container"
     ],
-    "viewIdPrefixes": ["row_thread_composer", "direct_thread"]
+    "viewIdPrefixes": ["row_thread_composer", "direct_thread"],
+    "inboxViewIds": ["inbox_refreshable_thread_list_recyclerview"]
   },
   "noCover": {
-    "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer"]
+    "viewIdPrefixes": ["reel_viewer_root", "story_viewer", "stories_viewer", "video_call", "rtc_call", "clips_viewer"]
   }
 }
