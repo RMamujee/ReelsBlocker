@@ -1357,12 +1357,22 @@ class BlockerService : AccessibilityService() {
         if (screen.isEmpty) return false
         val topZone = screen.top + screen.height() / 3
         val b = Rect()
-        val isAd = rules.sponsoredLabels.any { label ->
+        fun inViewer(n: AccessibilityNodeInfo) = n.isVisibleToUser && b.also { n.getBoundsInScreen(it) }.let { screen.contains(it) }
+        // Current builds mark a story ad with an "Ad" pill and an ad-only message box, and
+        // describe the header as "<account>'s sponsored story". Older ones show "Sponsored"
+        // under the account name.
+        val isAd = rules.storyAdViewIds.any { id ->
+            viewer.findAccessibilityNodeInfosByViewId(DetectionRules.IG_ID_PREFIX + id).any { inViewer(it) }
+        } || rules.storyAdPhrases.any { phrase ->
+            viewer.findAccessibilityNodeInfosByText(phrase).any { n ->
+                inViewer(n) && b.top < topZone &&
+                    listOfNotNull(n.text?.toString(), n.contentDescription?.toString()).any { it.contains(phrase, ignoreCase = true) }
+            }
+        } || rules.sponsoredLabels.filter { it.length >= MIN_SEARCH_LABEL }.any { label ->
             viewer.findAccessibilityNodeInfosByText(label).any { n ->
-                n.isVisibleToUser &&
+                inViewer(n) && b.top < topZone &&
                     listOfNotNull(n.text?.toString(), n.contentDescription?.toString())
-                        .any { DetectionRules.labelMatches(it, label) } &&
-                    b.also { n.getBoundsInScreen(it) }.let { screen.contains(it) && it.top < topZone }
+                        .any { DetectionRules.labelMatches(it, label) }
             }
         }
         if (!isAd) return false

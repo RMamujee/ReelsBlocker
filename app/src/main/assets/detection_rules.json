@@ -43,7 +43,9 @@
     "topBarViewIds": ["action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"]
   },
   "stories": {
-    "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer"]
+    "viewIdPrefixes": ["reel_viewer", "story_viewer", "stories_viewer"],
+    "adViewIds": ["reel_item_sponsored_label_footer_pill", "sponsored_message_composer_container"],
+    "adPhrases": ["sponsored story"]
   },
   "dm": {
     "viewIds": [

@@ -50,7 +50,11 @@ class DetectionRules(
     val feedTopViewIds: List<String>,
     /** The grid under the Explore tab. Generic ids, so only used while that tab is selected. */
     val exploreTabGridViewIds: List<String>,
-    val storyViewIdPrefixes: List<String>
+    val storyViewIdPrefixes: List<String>,
+    /** Views only a story ad has: the "Ad" pill and the ad's message box. */
+    val storyAdViewIds: List<String>,
+    /** Matched anywhere in a story header's text, e.g. "<account>'s sponsored story". */
+    val storyAdPhrases: List<String>
 ) {
     /** Fully-qualified resource ids for O(1) membership checks during the tree walk. */
     val reelsIdSet: Set<String> = reelsViewIds.map { IG_ID_PREFIX + it }.toHashSet()
@@ -217,7 +221,9 @@ class DetectionRules(
                 feedPageTitles = list("feed", "pageTitles", false, fb.feedPageTitles),
                 feedTopViewIds = list("feed", "topBarViewIds", true, fb.feedTopViewIds),
                 exploreTabGridViewIds = list("explore", "tabGridViewIds", true, fb.exploreTabGridViewIds),
-                storyViewIdPrefixes = list("stories", "viewIdPrefixes", true, fb.storyViewIdPrefixes)
+                storyViewIdPrefixes = list("stories", "viewIdPrefixes", true, fb.storyViewIdPrefixes),
+                storyAdViewIds = list("stories", "adViewIds", true, fb.storyAdViewIds),
+                storyAdPhrases = list("stories", "adPhrases", false, fb.storyAdPhrases)
             )
         }
 
@@ -244,7 +250,9 @@ class DetectionRules(
             feedPageTitles = listOf("Following", "Favorites"),
             feedTopViewIds = listOf("action_bar_LinearLayout", "main_feed_action_bar", "overlay_stories_tray_container", "action_bar_container"),
             exploreTabGridViewIds = listOf("recycler_view"),
-            storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer")
+            storyViewIdPrefixes = listOf("reel_viewer", "story_viewer", "stories_viewer"),
+            storyAdViewIds = listOf("reel_item_sponsored_label_footer_pill", "sponsored_message_composer_container"),
+            storyAdPhrases = listOf("sponsored story")
         )
     }
 }

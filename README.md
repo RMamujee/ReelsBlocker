@@ -44,7 +44,7 @@ If ads or suggested posts slip through, turn on Debug mode and scroll the feed: 
 
 ### Story ads
 
-With **Skip ads between stories** on (the default), a story whose header shows "Sponsored" is skipped with a swipe to the next account's stories, behind a brief "Skipping ad…" cover that lets the swipe through. That skips every card of the ad. The service looks again after the swipe settles, so back-to-back ads are skipped too. The story viewer is recognised by `stories.viewIdPrefixes`, and the label by `feed.sponsoredLabels` (both locale-specific: add your language's "Sponsored").
+With **Skip ads between stories** on (the default), a story ad is skipped with a swipe to the next account's stories, behind a brief "Skipping ad…" cover that lets the swipe through. That skips every card of the ad. The service looks again after the swipe settles, so back-to-back ads are skipped too. Current builds mark a story ad with an "Ad" pill and an ad-only message box (`stories.adViewIds`) and describe its header as "<account>'s sponsored story" (`stories.adPhrases`); older ones show "Sponsored" under the account name (`feed.sponsoredLabels`). The story viewer is recognised by `stories.viewIdPrefixes`. Phrases and labels are locale-specific: add your language's.
 
 ### Reels friends send you
 
@@ -82,9 +82,10 @@ APK lands at `app\build\outputs\apk\debug\app-debug.apk`.
    - **Android 13+ "Restricted setting":** if the toggle is greyed out because the APK was sideloaded, go to Settings > Apps > Reels Blocker > tap the **⋮ menu** > **Allow restricted settings**, then try again. (Installing via `adb install` avoids this entirely.)
 3. Tap **Exempt from battery optimization** and allow it. Then also: **Settings > Apps > Reels Blocker > Battery > Unrestricted** — One UI kills accessibility services that aren't exempted.
 4. Do **not** put the app to "sleep" (Settings > Battery > Background usage limits — make sure Reels Blocker is not in Sleeping/Deep sleeping apps).
-5. Open Instagram, tap the Reels tab — you should bounce straight back to Home.
-6. **Turn USB debugging back off** when you're done (Settings > Developer options). This is a debuggable build; leaving adb enabled is the only meaningful security exposure this app carries, and the in-app rules importer means you never need adb for updates.
-7. **Revoke "install unknown apps"** from whichever app you installed through: Settings > Apps > ⋮ > Special access > Install unknown apps > Chrome / Drive / My Files > OFF. Leaving it on lets that app install other APKs later.
+5. **After every update** (reinstalling the APK), turn the service off and on again in Accessibility settings. Android stops the app to update it and then marks its accessibility service as crashed: it still looks enabled but gets no events until it's toggled.
+6. Open Instagram, tap the Reels tab — you should bounce straight back to Home.
+7. **Turn USB debugging back off** when you're done (Settings > Developer options). This is a debuggable build; leaving adb enabled is the only meaningful security exposure this app carries, and the in-app rules importer means you never need adb for updates.
+8. **Revoke "install unknown apps"** from whichever app you installed through: Settings > Apps > ⋮ > Special access > Install unknown apps > Chrome / Drive / My Files > OFF. Leaving it on lets that app install other APKs later.
 
 ## Privacy
 
