@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SilentFeed: just your friends</title>
+<meta name="description" content="Instagram with only the people you follow. No ads, no suggested posts, no Reels, and a check mark when you're caught up.">
+<meta name="theme-color" content="#0b0b0f">
+<style>
+  :root {
+    --bg: #0b0b0f; --card: #15151c; --line: #26262f; --text: #f3f3f6; --muted: #a2a2b0;
+    --accent: #ff4f7b; --accent2: #8a5cff; --ok: #3ddc84;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 28px 20px 64px; }
+  a { color: inherit; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.01em; }
+  .logo { width: 34px; height: 34px; border-radius: 10px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; }
+  .logo svg { width: 20px; height: 20px; }
+  h1 { font-size: clamp(34px, 8vw, 50px); line-height: 1.05; letter-spacing: -.03em; margin: 44px 0 14px; }
+  h1 span { background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { color: var(--muted); font-size: 18px; margin: 0 0 28px; max-width: 34em; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; padding: 14px 20px; border-radius: 14px; font-weight: 650; text-decoration: none; border: 1px solid var(--line); }
+  .btn.primary { background: var(--text); color: #111; border-color: var(--text); }
+  .btn svg { width: 20px; height: 20px; }
+  .meta { color: var(--muted); font-size: 13px; }
+  section { margin-top: 56px; }
+  h2 { font-size: 22px; letter-spacing: -.01em; margin: 0 0 16px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+  .feature { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+  .feature b { display: block; margin-bottom: 4px; }
+  .feature p { margin: 0; color: var(--muted); font-size: 14px; }
+  ol { margin: 0; padding-left: 22px; }
+  ol li { margin: 0 0 10px; }
+  ol li::marker { color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
+  .note { color: var(--muted); font-size: 14px; margin-top: 14px; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; vertical-align: 2px; }
+  code { font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; word-break: break-all; color: var(--muted); }
+  .cols { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 640px) { .cols { grid-template-columns: 1fr 1fr; } }
+  .yes::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+  .no::before { content: "— "; color: var(--muted); }
+  ul.plain { list-style: none; padding: 0; margin: 0; }
+  ul.plain li { margin: 0 0 6px; font-size: 15px; }
+  footer { margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.2 4.2L19 7"/></svg>
+    </div>
+    SilentFeed
+  </div>
+
+  <h1>Instagram, <span>just your friends.</span></h1>
+  <p class="lede">Only posts from people you follow, newest first, with a check mark when you're caught up. No ads, no suggested posts, no Reels feed. Messages, stories and calls still work.</p>
+
+  <div class="cta">
+    <a class="btn primary" href="/download/silentfeed.apk" download>
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.38.38 0 0 0-.66-.38l-1.86 3.22a11.4 11.4 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38L6.4 9.48A10.8 10.8 0 0 0 1 18h22a10.8 10.8 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
+      Download for Android
+    </a>
+    <a class="btn" href="#iphone">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.37 12.6c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.7-3.18-1.73-1.35-.14-2.64.8-3.33.8-.69 0-1.74-.78-2.86-.76-1.47.02-2.83.86-3.59 2.17-1.53 2.65-.39 6.58 1.1 8.73.73 1.05 1.6 2.23 2.73 2.19 1.1-.04 1.51-.71 2.84-.71 1.33 0 1.7.71 2.86.69 1.18-.02 1.93-1.07 2.65-2.13.84-1.22 1.18-2.4 1.2-2.46-.03-.01-2.3-.88-2.3-3.48zM14.2 6.13c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.54 1.31-.56.65-1.05 1.68-.92 2.67.97.08 1.96-.49 2.56-1.22z"/></svg>
+      iPhone
+    </a>
+  </div>
+  <p class="meta" style="margin-top:12px">Version {{VERSION}} · {{APK_MB}} MB · Android 8 or later · free</p>
+
+  <section>
+    <h2>What's different</h2>
+    <div class="features">
+      <div class="feature"><b>Friends only</b><p>Home is the people you follow, in order. Nothing picked by an algorithm.</p></div>
+      <div class="feature"><b>Ends when you're caught up</b><p>A check mark instead of endless scrolling. Older posts are there if you ask.</p></div>
+      <div class="feature"><b>No ads</b><p>Removed before they load, like an ad blocker. Story ads are never fetched.</p></div>
+      <div class="feature"><b>No Reels feed</b><p>The endless video feed is gone. Reels friends send you still play.</p></div>
+      <div class="feature"><b>Stories</b><p>Everyone you follow at the top. Swipe between people, as in the app.</p></div>
+      <div class="feature"><b>Messages and calls</b><p>Chats, voice and video calls, and a camera button for quick photos.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Install on Android</h2>
+    <div class="card">
+      <ol>
+        <li>Tap <b>Download for Android</b> above and open the file when it's done.</li>
+        <li>If your phone asks, allow your browser to <b>install unknown apps</b> (Android asks this for any app that isn't from the Play Store).</li>
+        <li>Open <b>SilentFeed</b> and log in to Instagram. Your login goes straight to Instagram; this app never sees or stores it.</li>
+      </ol>
+      <p class="note">Updates: the app tells you when there's a new version and downloads it from this page. Install it over the old one and you stay logged in.</p>
+      <p class="note">The app also includes an optional blocker for the real Instagram app, which needs Android's accessibility permission. Android blocks that for apps installed from outside the Play Store until you allow it: in <b>Settings › Apps › Reels Blocker</b>, open the <b>⋮</b> menu and choose <b>Allow restricted settings</b>. You don't need it to use SilentFeed.</p>
+    </div>
+  </section>
+
+  <section id="iphone">
+    <h2>iPhone <span class="tag">Safari</span></h2>
+    <div class="card">
+      <p style="margin-top:0">Apple only allows apps from the App Store, so on iPhone SilentFeed runs inside Safari, using the free <b>Userscripts</b> extension.</p>
+      <ol>
+        <li>Install <a href="https://apps.apple.com/app/userscripts/id1463298887">Userscripts</a> from the App Store and open it once.</li>
+        <li>In <b>Settings › Apps › Safari › Extensions › Userscripts</b>, turn it on and allow it on <b>instagram.com</b>.</li>
+        <li>In Safari, open <a href="/silentfeed.user.js">the SilentFeed script</a>, tap the <b>Userscripts</b> button in the address bar (the puzzle piece), and tap <b>Install</b>.</li>
+        <li>Go to <b>instagram.com</b> in Safari and log in. Tip: <b>Share › Add to Home Screen</b> gives it an icon.</li>
+      </ol>
+      <div class="cols" style="margin-top:18px">
+        <ul class="plain">
+          <li class="yes">Friends-only feed and check mark</li>
+          <li class="yes">No ads, suggested posts or Reels</li>
+          <li class="yes">Stories row, swipe between people</li>
+        </ul>
+        <ul class="plain">
+          <li class="no">Voice and video calls (Android app only)</li>
+          <li class="no">Smaller emoji (Android only)</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Privacy</h2>
+    <div class="card">
+      <p style="margin:0">There's no SilentFeed server and no account. The app is Instagram's own website with a filter on top: everything you see and send goes between your phone and Instagram. Nothing is collected or tracked. The only thing it ever asks this site is whether there's a newer version.</p>
+    </div>
+  </section>
+
+  <footer>
+    <p>SilentFeed isn't made by, affiliated with or endorsed by Instagram or Meta. Use it with your own account, under Instagram's terms.</p>
+    <p>To check your download: the file's SHA-256 is <code>{{APK_SHA256}}</code></p>
+  </footer>
+</main>
+</body>
+</html>

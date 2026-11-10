@@ -1,6 +1,6 @@
 <resources>
     <string name="app_name">Reels Blocker</string>
-    <string name="feed_app_name">Insta Clean</string>
+    <string name="feed_app_name">SilentFeed</string>
     <string name="service_description">Works in Instagram only. When you land on Reels or Explore, it backs you out or hides the page. It also scrolls past ads and suggested posts in your feed and skips story ads. While one of its covers is showing it also notices other apps coming to the front, only to remove the covers the moment you leave Instagram. No data leaves your phone.</string>
 
     <string name="status_service_on">Blocker service: RUNNING</string>
@@ -14,10 +14,9 @@
     <string name="block_explore">Hide the Explore grid (searching for accounts still works)</string>
     <string name="hide_reels_icon">Hide the Reels tab icon</string>
     <string name="explore_cover">Explore hidden. Tap the search bar above to find accounts.</string>
-    <string name="hide_suggested">Home feed: friends only (hide suggested posts and accounts)</string>
-    <string name="hide_feed_ads">Hide ads in the home feed</string>
-    <string name="skip_story_ads">Skip ads between stories</string>
-    <string name="hide_like_counts">Hide like counts (Insta Clean)</string>
+    <string name="hide_suggested">Real Instagram app: friends only (skip suggested posts)</string>
+    <string name="hide_feed_ads">Real Instagram app: skip feed ads</string>
+    <string name="skip_story_ads">Real Instagram app: skip story ads</string>
     <string name="allow_dm_reels">Allow reels friends send in DMs (only the one you tap; swiping on gets blocked)</string>
 
     <string name="pause_title">Take a break from blocking</string>
@@ -41,4 +40,9 @@
     <string name="overlay_reels">Reels blocked 🎯</string>
     <string name="overlay_explore">Explore blocked 🎯</string>
     <string name="overlay_sub">Go do something real.</string>
+    <string name="update_title">Update available</string>
+    <string name="update_message">SilentFeed %1$s is out. Download it now? Install it over this one and you stay logged in.</string>
+    <string name="update_download">Download</string>
+    <string name="update_later">Later</string>
+    <string name="update_skip">Skip this version</string>
 </resources>

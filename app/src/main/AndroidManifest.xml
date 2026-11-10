@@ -4,6 +4,12 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- Only the in-app Instagram (FeedActivity) uses the network; the blocker service doesn't. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Voice and video calls in SilentFeed; asked for the first time a call needs them. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:allowBackup="false"
@@ -21,10 +27,21 @@
             </intent-filter>
         </activity>
 
+        <!-- Photos and videos taken with the camera for Instagram, shared with the camera app. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Its own launcher icon: Instagram's website with the filter built in. -->
         <activity
             android:name=".FeedActivity"
-            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:exported="true"
             android:icon="@mipmap/ic_feed"
             android:label="@string/feed_app_name"

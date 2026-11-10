@@ -2,7 +2,7 @@
 
 Personal Android app that strips Instagram down to your friends. It comes as two parts:
 
-- **Insta Clean** (its own launcher icon): Instagram's website inside the app, with ads, suggested posts, the Reels feed and the Explore grid removed from the page as it loads, the way a browser ad blocker works. Nothing is covered or skipped; it simply isn't there. See [Insta Clean](#insta-clean-the-in-app-instagram).
+- **SilentFeed** (its own launcher icon): Instagram's website inside the app, with ads, suggested posts, the Reels feed and the Explore grid removed from the page as it loads, the way a browser ad blocker works. Nothing is covered or skipped; it simply isn't there. See [SilentFeed](#insta-clean-the-in-app-instagram).
 - **Reels Blocker** (the accessibility service): for when you open the real Instagram app.
 
 The rest of this section is about the second part. It kicks you out of **Reels**, hides **Explore** (search still works), scrolls past **ads and suggested posts** in the home feed, and **skips ads between stories**. DMs, friends' stories and friends' posts are left alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
@@ -57,29 +57,32 @@ With **Allow reels friends send in DMs** on (the default), a reel you open strai
 
 If DM reels still get blocked, the chat screen's IDs have changed. With Debug mode on, open a chat and look for its IDs in `adb logcat -s ReelsBlocker`, then add them to `dm.viewIds`. If swiping on isn't blocked, the `DM-reel scroll` log lines show what the pager reports.
 
-## Insta Clean: the in-app Instagram
+## SilentFeed: the in-app Instagram
 
-`FeedActivity` loads `https://www.instagram.com/` in a WebView, with its own login (cookies stay in the app). A filter script, `app/src/main/assets/web_filter.js`, is installed with `WebViewCompat.addDocumentStartJavaScript`, so it runs on Instagram's pages before any of Instagram's own code, and a `MutationObserver` checks every element as it's added, before it's painted. It uses the same switches as the main screen.
+`FeedActivity` loads Instagram's **Following** feed (`https://www.instagram.com/?variant=following`) in a WebView, with its own login (cookies stay in the app). A filter script, `app/src/main/assets/web_filter.js`, is installed with `WebViewCompat.addDocumentStartJavaScript`, so it runs on Instagram's pages before any of Instagram's own code, and a `MutationObserver` checks every element as it's added, before it's painted. It works like an ad blocker whatever the main screen's ad and suggested-post switches say (those are for the real Instagram app, where the only option is skipping or covering); the Reels and Explore switches apply to both.
 
+- **Following feed, then a check mark**: Home is always the Following feed (only accounts you follow, newest first); the Home tab and any visit to the For-you feed switch to it in place, without a reload. Once the feed reaches a post you'd already scrolled to last time, or one over two days old, it ends with Instagram-style "You're all caught up" and a check mark, the loading spinner goes, and Instagram's request for the next page is held unsent (otherwise it keeps downloading pages of hidden posts, ~6 MB in 8 s of scrolling). **See older posts** under it brings them back and sends the held request. What counts as seen only moves on when you actually scroll down to the check mark (`localStorage` key `rb-seen-top`), so a visit cut short never hides posts you didn't get to.
+- **Stories row**: Instagram's Following page has no stories row (only its For-you page does), so the filter draws one at the top of the feed from the same stories-tray API the site uses (`/api/v1/feed/reels_tray/`): Your story first, then unseen stories in Instagram's ranking (gradient ring, green for close friends), then seen ones (grey ring). A tap opens Instagram's own story viewer in place; coming back refreshes the rings. The Following page's back arrow is hidden (Home has none in the app).
 - **Feed**: a post is removed when its header says "Ad"/"Sponsored"/"Paid partnership", or "Suggested for you" or has a Follow button (accounts you follow don't). "Suggestions for you" account strips go too. Instagram's feed is a virtual list that pads its bottom for the posts it expects below, counting removed ones, so the filter sets that padding to zero: the feed ends at the last post from someone you follow, with a note under it, and more slot in as Instagram loads them. No blank screens.
 - **Reels**: the Reels tab is gone and the endless Reels feed (`/reels/`) never opens. A single reel (`/reel/<id>/`, from a friend, a chat or a profile) is just a post with one video and opens normally.
 - **Explore**: the grid tiles (links to posts and reels) are removed; the search box and its results (links to profiles, tags, places) stay.
-- **Story ads**: a story whose header says "Ad" makes the page fully transparent (so you see black) and every card of the ad is tapped past straight away, the way the right side of a story is tapped to advance.
+- **Story ads**: never fetched. Story ads come in a request of their own (`PolarisStoriesV3AdsPoolQuery`, the stories "ads pool"); the filter never sends it, so Instagram has no ads to put between stories and, still waiting for them, doesn't ask again. `data-rb-ads-blocked` on `<html>` counts blocked requests. As a fallback, if a story whose header says "Ad" ever shows anyway, the page goes fully transparent (black) and the ad is tapped past.
 - **"Use the app" prompts**: dialogs and banners pushing the app are removed, and the page scroll they lock is unlocked.
-- **Like counts** (switch on the main screen, on by default): the numbers next to the Like, Comment and Share buttons and the "Liked by … and N others" line are hidden. The buttons still work.
+- **Bottom bar**: Home, Messages, Search, Profile (Messages and Search swapped; the Reels slot is removed outright, so the icons stay evenly spaced). The tabs are reordered with CSS `order`; Instagram's elements aren't moved.
+- **Calls**: the website has calls but only lets desktop browsers use them (`PolarisCallGatingHelpers.isWebCallingEnabled` checks for a desktop). Posing as a desktop would switch the whole site to its desktop layout, so instead only that check (and `RTWebIncomingRingConfiguration.isSupportedClient`) is changed, by wrapping Instagram's module loader (`__d`) as those modules are defined. The phone layout has no call buttons, so the filter adds Audio and Video call buttons to a chat's header, which call Instagram's own `PolarisCallNavigator.launchCall`. Calls open in a window of their own over the page (only from a tap, and only to Instagram; anything else goes to the browser). Camera and microphone are given to Instagram's pages only, with Android's permission, asked the first time a call needs it.
+- **Speed**: Back on the feed puts the app away instead of closing it (like the Instagram app), so reopening is instant (56 ms, page kept) instead of reloading Instagram (~3 s). The Following feed downloads far less than the For-you feed, which is mostly posts the filter would hide. Pages are pre-drawn just off screen while scrolling.
 - The page is kept clear of the status bar, navigation bar and keyboard, and Instagram's bottom bar hides while you type.
 
-Only Instagram and Meta's login pages load inside; every other link (including Instagram's `l.instagram.com` redirects) opens in your browser. Camera and microphone requests are refused; picking photos to post works. It's the website, so there are no push notifications, and some app-only features (e.g. posting reels or stories with effects) aren't there.
+Only Instagram and Meta's login pages load inside; every other link (including Instagram's `l.instagram.com` redirects) opens in your browser. Camera and microphone go to Instagram's pages only (for calls); picking photos to post works. It's the website, so there are no push notifications, and some app-only features (e.g. posting reels or stories with effects) aren't there.
 
 If Instagram changes its page and something slips through: debug builds allow Chrome DevTools to attach (`chrome://inspect`, or `adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`), and with Debug mode on the filter logs `[rb]` lines to the console. Labels live at the top of `web_filter.js`.
 
 ## Planned
 
 - Real app: skip feed ads with accessibility scroll actions instead of injected swipes, so a skip can never land as a tap (scripted testing once opened a profile and an ad's link).
-- Insta Clean: open to the Following feed (only accounts you follow, newest first).
-- Insta Clean: leave the story viewer after the last story instead of pausing on it.
-- Open instagram.com links from other apps in Insta Clean.
-- A daily time limit for Insta Clean.
+- SilentFeed: leave the story viewer after the last story instead of pausing on it.
+- Open instagram.com links from other apps in SilentFeed.
+- A daily time limit for SilentFeed.
 
 ## When Instagram updates break detection
 
@@ -118,4 +121,17 @@ APK lands at `app\build\outputs\apk\debug\app-debug.apk`.
 
 ## Privacy
 
-Everything is on-device. The service reads the screen only when Instagram is in front, and hears other apps only while one of its covers is showing, and then only to notice their window coming to the front. The app has the internet permission only for Insta Clean, which talks to Instagram (and Meta's login pages) and nothing else; the blocker service never uses the network. No analytics, and nothing else leaves the phone.
+Everything is on-device. The service reads the screen only when Instagram is in front, and hears other apps only while one of its covers is showing, and then only to notice their window coming to the front. The app has the internet permission only for SilentFeed, which talks to Instagram (and Meta's login pages) and nothing else; the blocker service never uses the network. No analytics, and nothing else leaves the phone.
+
+## Releasing SilentFeed
+
+SilentFeed is published at https://silentfeed.vercel.app (Android download, in-app update
+check, and the iPhone Safari userscript), from the `site/` folder.
+
+1. Bump `versionCode` / `versionName` in `app/build.gradle.kts`.
+2. `gradlew assembleRelease` (add `-x lintVitalAnalyzeRelease -x lintVitalReportRelease -x lintVitalRelease` if Google's servers time out).
+3. `node site/build.mjs "what's new"` then, in `site/`, `vercel deploy --prod --yes`.
+
+Release builds are signed with the key in `~/.android-release/` (passwords in
+`~/.gradle/gradle.properties`, never in this repo). Every update must use the same key, so
+keep a backup of both.
