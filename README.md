@@ -137,7 +137,7 @@ The selected-tab fallback usually keeps working even when IDs change, since it k
 Needs JDK 17+ and the Android SDK (platform 35). The Gradle wrapper is committed, so from the project root:
 
 ```powershell
-$env:JAVA_HOME = "<path to JDK 17>"   # this machine: C:\Users\Rahil\android-dev\jdk-17.0.20.1+1
+$env:JAVA_HOME = "<path to JDK 17>"
 .\gradlew.bat assembleDebug
 ```
 
