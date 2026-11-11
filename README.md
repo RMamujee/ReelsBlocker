@@ -1,8 +1,44 @@
-# Reels Blocker
+# Reels Blocker / SilentFeed
 
-Personal Android app that strips Instagram down to your friends. It comes as two parts:
+**Download: [silentfeed.vercel.app](https://silentfeed.vercel.app)** (Android APK, plus a Safari userscript for iPhone)
 
-- **SilentFeed** (its own launcher icon): Instagram's website inside the app, with ads, suggested posts, the Reels feed and the Explore grid removed from the page as it loads, the way a browser ad blocker works. Nothing is covered or skipped; it simply isn't there. See [SilentFeed](#insta-clean-the-in-app-instagram).
+An Android app that strips Instagram down to the people you follow: no Reels, no
+Explore grid, no ads, no suggested posts. DMs, calls, stories and friends' posts
+still work.
+
+**Highlights**
+
+- **Two independent approaches.** *SilentFeed* runs Instagram's website in a
+  WebView with a filter script injected before any of Instagram's own code, so
+  ads and suggestions are removed before they're painted (like an ad blocker).
+  *Reels Blocker* is an Android accessibility service that works on the real
+  Instagram app, detecting Reels/Explore from the view hierarchy and covering
+  or escaping them.
+- **Fixes at the request level, not just the UI.** Story ads are never shown
+  because the request that fetches them is never sent. Once you reach posts
+  you've already seen, the feed shows "You're all caught up" and holds back
+  the next-page request (saving ~6 MB per 8 s of scrolling).
+- **Features the mobile website doesn't have.** Audio/video calls (normally
+  desktop-only) are enabled by patching two capability checks in Instagram's
+  module loader, and a stories row is rebuilt from the site's own stories API.
+- **Resilient to Instagram updates.** Detection rules live in a validated JSON
+  file that can be updated in-app without reinstalling, with a debug mode that
+  logs the current view IDs to help fix breakage.
+- **Privacy by design.** Everything stays on the device, with no analytics. The
+  accessibility service never touches the network and only reads the screen
+  while Instagram is in front.
+
+**Stack:** Kotlin, Android (AccessibilityService, WebView,
+`addDocumentStartJavaScript`), JavaScript (MutationObserver-based filter),
+Gradle, Node (release site build), Vercel
+
+---
+
+## Overview
+
+It comes as two parts:
+
+- **SilentFeed** (its own launcher icon): Instagram's website inside the app, with ads, suggested posts, the Reels feed and the Explore grid removed from the page as it loads, the way a browser ad blocker works. Nothing is covered or skipped; it simply isn't there. See [SilentFeed](#silentfeed-the-in-app-instagram).
 - **Reels Blocker** (the accessibility service): for when you open the real Instagram app.
 
 The rest of this section is about the second part. It kicks you out of **Reels**, hides **Explore** (search still works), scrolls past **ads and suggested posts** in the home feed, and **skips ads between stories**. DMs, friends' stories and friends' posts are left alone. Built for sideloading — not for the Play Store (accessibility-service apps need special review there).
